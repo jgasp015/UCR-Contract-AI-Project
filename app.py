@@ -28,7 +28,7 @@ def query_groq(prompt, system_role):
             {"role": "system", "content": system_role},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.0 # Strict factual mode
+        "temperature": 0.0 
     }
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=25)
@@ -41,7 +41,11 @@ def query_groq(prompt, system_role):
         return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_bid_links(url):
-    tech_keywords = ["computer", "software", "network", "telecommunication", "hardware", "radio", "data", "ev "]
+    # Expanded keywords to ensure Cabling and Infrastructure are captured
+    tech_keywords = [
+        "computer", "software", "network", "telecommunication", "hardware", 
+        "radio", "data", "ev ", "cabling", "fiber", "infrastructure", "wireless"
+    ]
     found_links = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -52,7 +56,7 @@ def scrape_url_with_bid_links(url):
             href = link['href']
             if "biddetail" in href.lower():
                 found_links.append(urljoin(url, href))
-        elements = soup.find_all(['span', 'td', 'p', 'li'])
+        elements = soup.find_all(['span', 'td', 'p', 'li', 'div'])
         filtered_text = " ".join([el.get_text(strip=True) for el in elements if any(key in el.get_text().lower() for key in tech_keywords)])
         return filtered_text[:4000], list(set(found_links))
     except Exception as e:
@@ -92,13 +96,15 @@ if final_text:
 
     with col1:
         if st.button("Bid Overview"):
-            role = "You are a professional advisor translating bids into simple executive summaries."
+            role = "You are a professional advisor who simplifies technical government bids."
+            # INSTRUCTION: Added focus on 'Improvement' and 'Connectivity'
             prompt = (
-                f"Create a summary with these sections:\n"
-                f"1. **The Big Picture**: Start with 'This bid is about...' \n"
-                f"2. **What is Needed**: Products or services bought.\n"
-                f"3. **Who Can Apply**: Vendor requirements.\n"
-                f"STRICT: Only include info present in the text. Text: {final_text}"
+                f"Explain this project simply. Follow this structure:\n"
+                f"1. **The Big Picture**: Start with 'This bid is about...' "
+                f"Explain how this project will improve city infrastructure or connectivity (e.g., faster data, better communication).\n"
+                f"2. **What is Needed**: Describe the technical services like cabling, telecommunications, or networking equipment.\n"
+                f"3. **Who Can Apply**: Requirements for the vendor (experience with similar city projects, certifications).\n"
+                f"Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
@@ -110,13 +116,12 @@ if final_text:
 
     with col2:
         if st.button("Technical Specs"):
-            # UPDATED PROMPT: Added 'Strictly do not suggest'
-            role = "You are a strict technical auditor."
+            # INSTRUCTION: Explicitly include Cabling and Telecomm
+            role = "You are a strict technical infrastructure auditor."
             prompt = (
-                f"Identify only the IT hardware, software, and technical gear EXPLICITLY mentioned in the text. "
-                f"STRICTLY DO NOT suggest items, do not give examples, and do not list things 'commonly associated' with IT. "
-                f"If no specific gear is mentioned, say 'No specific IT hardware or software mentioned in this text.' "
-                f"Text: {final_text}"
+                f"Identify only the IT hardware, software, and physical infrastructuregear EXPLICITLY mentioned. "
+                f"Include: Cabling (Cat6, Fiber), Telecommunications systems, Networking hardware, and Data systems. "
+                f"STRICTLY DO NOT suggest items. Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
@@ -126,7 +131,7 @@ if final_text:
 
     with col3:
         if st.button("Bid Submission"):
-            ans, dur = query_groq(f"List deadlines and how to submit. Only use provided text: {final_text}", "Procurement Advisor.")
+            ans, dur = query_groq(f"List deadlines and how to submit: {final_text}", "Procurement Advisor.")
             with st.container(border=True):
                 st.markdown("#### 📝 Submission Guide")
                 st.write(ans)
@@ -134,7 +139,7 @@ if final_text:
 
     with col4:
         if st.button("Compliance Requirements"):
-            ans, dur = query_groq(f"Identify all mandatory compliance, insurance, and reporting rules mentioned: {final_text}", "Legal Compliance Auditor.")
+            ans, dur = query_groq(f"Identify all mandatory compliance, insurance, and reporting rules: {final_text}", "Legal Compliance Auditor.")
             with st.container(border=True):
                 st.markdown("#### ⚖️ Compliance Checklist")
                 st.write(ans)
