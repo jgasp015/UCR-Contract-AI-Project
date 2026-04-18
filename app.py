@@ -30,33 +30,47 @@ def query_groq(prompt, system_role):
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=25)
         data = response.json()
         duration = round(time.time() - start_time, 2)
-        
         if "choices" in data:
             return data['choices'][0]['message']['content'], duration
-        else:
-            # This captures specific API errors like "Rate Limit"
-            error_msg = data.get('error', {}).get('message', 'Unknown AI Error')
-            return f"⚠️ Groq API says: {error_msg}", 0
+        return f"⚠️ API Error: {data.get('error', {}).get('message', 'Unknown')}", 0
     except Exception as e:
         return f"⚠️ Connection Error: {str(e)}", 0
 
-def scrape_url_with_strict_filter(url):
-    it_keywords = ["computer", "software", "network", "telecommunication", "server", "technology", "hardware", "radio", "cabling"]
+def scrape_url_with_broad_tech_filter(url):
+    """
+    Expanded keyword list to capture the full spectrum of IT, 
+    Telecomm, Data, and EV technology.
+    """
+    tech_keywords = [
+        # Computing & Data
+        "computer", "laptop", "server", "software", "database", "cloud", "data", "storage",
+        # Networking & Telecom
+        "network", "telecommunication", "broadband", "wi-fi", "ethernet", "radio", "voip", "cabling", "fiber",
+        # Hardware & Office
+        "hardware", "printer", "scanner", "copier", "peripheral", "monitor",
+        # Future Tech & Infrastructure
+        "electric vehicle", "ev charging", "smart city", "iot", "security", "cyber", "electronic"
+    ]
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=12)
         soup = BeautifulSoup(res.text, 'html.parser')
-        elements = soup.find_all(['span', 'a', 'td', 'p'])
+        
+        # We look for all text-containing elements
+        elements = soup.find_all(['span', 'a', 'td', 'p', 'li', 'h3'])
         filtered_results = []
+        
         for el in elements:
             text = el.get_text(strip=True)
-            if any(key in text.lower() for key in it_keywords):
-                if text not in filtered_results:
+            # Match against our expanded tech dictionary
+            if any(key in text.lower() for key in tech_keywords):
+                if text not in filtered_results and len(text) > 5:
                     filtered_results.append(text)
-        return " | ".join(filtered_results)[:6000] if filtered_results else "No IT content found."
+        
+        return " | ".join(filtered_results)[:7000] if filtered_results else "No relevant Tech/IT content found."
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -76,22 +90,21 @@ input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 final_text = ""
 
 if input_mode == "Live Portal Link":
-    url_input = st.text_input("Paste Portal URL:", placeholder="https://...")
+    url_input = st.text_input("Paste Portal URL:", placeholder="Paste Chicago, LA, or other bidding links...")
     if url_input:
-        with st.spinner("Scraping & Filtering..."):
-            final_text = scrape_url_with_strict_filter(url_input)
-            if "No IT content" in final_text:
+        with st.spinner("Broad Tech Filter scanning..."):
+            final_text = scrape_url_with_broad_tech_filter(url_input)
+            if "No relevant" in final_text:
                 st.warning(final_text)
             else:
-                st.success("Scrape complete.")
+                st.success("Technology context captured!")
 else:
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
     if uploaded_file:
         reader = PdfReader(uploaded_file)
-        # Grab first 2 and last page to stay under token limits
         pages_to_read = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
         final_text = "".join([reader.pages[i].extract_text() for i in pages_to_read])
-        st.success("PDF analyzed successfully.")
+        st.success("PDF analyzed.")
 
 if final_text and "Error" not in final_text:
     st.divider()
@@ -99,18 +112,30 @@ if final_text and "Error" not in final_text:
 
     with col1:
         if st.button("Simplify for Citizens"):
-            ans, dur = query_groq(f"Summarize this bid in 2 sentences: {final_text}", "You are a plain-language expert.")
+            role = "You are a plain-language advocate for tech policy."
+            prompt = f"Summarize the technology goals of this project in 2 sentences. Focus on IT, EVs, or Data: {final_text}"
+            ans, dur = query_groq(prompt, role)
             st.info(ans)
             if "⚠️" not in ans: st.session_state.total_saved += 5
 
     with col2:
         if st.button("Extract Technical Specs"):
-            ans, dur = query_groq(f"List only IT/Radio equipment found here: {final_text}", "You are a hardware auditor.")
+            role = "You are a senior IT & Infrastructure Auditor."
+            # Explicitly telling the AI to look for the full range of tech
+            prompt = (
+                f"Extract a list of all technical equipment. This includes: "
+                f"Computers, EV Charging Stations, Networking gear, Printers, and Software. "
+                f"Ignore all non-technical items like food, fuel, or construction. "
+                f"Text: {final_text}"
+            )
+            ans, dur = query_groq(prompt, role)
             st.success(ans)
             if "⚠️" not in ans: st.session_state.total_saved += 15
 
     with col3:
         if st.button("Reporting Guidance"):
-            ans, dur = query_groq(f"What are the reporting deadlines? {final_text}", "Compliance officer.")
+            role = "Technical Compliance Officer."
+            prompt = f"What are the technical reporting deadlines and vendor requirements? {final_text}"
+            ans, dur = query_groq(prompt, role)
             st.warning(ans)
             if "⚠️" not in ans: st.session_state.total_saved += 10
