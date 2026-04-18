@@ -28,7 +28,7 @@ def query_groq(prompt, system_role):
             {"role": "system", "content": system_role},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.0 
+        "temperature": 0.0 # Strict factual mode
     }
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=25)
@@ -92,14 +92,13 @@ if final_text:
 
     with col1:
         if st.button("Bid Overview"):
-            # UPDATED PROMPT: More context, structured "Plain English" sections
-            role = "You are a professional advisor who translates complex government bids into easy-to-read executive summaries."
+            role = "You are a professional advisor translating bids into simple executive summaries."
             prompt = (
-                f"Create a helpful summary of this bid. Use three short sections:\n"
-                f"1. **The Big Picture**: Start with 'This bid is about...' and explain the main goal in simple terms.\n"
-                f"2. **What is Needed**: Briefly describe the products or services being bought.\n"
-                f"3. **Who Can Apply**: Summarize what the buyer wants in a vendor (experience, certifications, or specific skills).\n"
-                f"Keep the words simple but provide enough detail to understand the project's scope. Text: {final_text}"
+                f"Create a summary with these sections:\n"
+                f"1. **The Big Picture**: Start with 'This bid is about...' \n"
+                f"2. **What is Needed**: Products or services bought.\n"
+                f"3. **Who Can Apply**: Vendor requirements.\n"
+                f"STRICT: Only include info present in the text. Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
@@ -111,7 +110,15 @@ if final_text:
 
     with col2:
         if st.button("Technical Specs"):
-            ans, dur = query_groq(f"List the IT hardware/software gear: {final_text}", "IT Auditor.")
+            # UPDATED PROMPT: Added 'Strictly do not suggest'
+            role = "You are a strict technical auditor."
+            prompt = (
+                f"Identify only the IT hardware, software, and technical gear EXPLICITLY mentioned in the text. "
+                f"STRICTLY DO NOT suggest items, do not give examples, and do not list things 'commonly associated' with IT. "
+                f"If no specific gear is mentioned, say 'No specific IT hardware or software mentioned in this text.' "
+                f"Text: {final_text}"
+            )
+            ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 🛠️ Equipment List")
                 st.write(ans)
@@ -119,7 +126,7 @@ if final_text:
 
     with col3:
         if st.button("Bid Submission"):
-            ans, dur = query_groq(f"List deadlines and how to submit: {final_text}", "Procurement Advisor.")
+            ans, dur = query_groq(f"List deadlines and how to submit. Only use provided text: {final_text}", "Procurement Advisor.")
             with st.container(border=True):
                 st.markdown("#### 📝 Submission Guide")
                 st.write(ans)
@@ -127,7 +134,7 @@ if final_text:
 
     with col4:
         if st.button("Compliance Requirements"):
-            ans, dur = query_groq(f"Identify all mandatory compliance, insurance, and reporting rules: {final_text}", "Legal Compliance Auditor.")
+            ans, dur = query_groq(f"Identify all mandatory compliance, insurance, and reporting rules mentioned: {final_text}", "Legal Compliance Auditor.")
             with st.container(border=True):
                 st.markdown("#### ⚖️ Compliance Checklist")
                 st.write(ans)
