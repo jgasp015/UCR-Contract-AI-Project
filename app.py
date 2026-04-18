@@ -12,7 +12,7 @@ st.set_page_config(page_title="UCR Contract AI", layout="wide")
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing!")
+    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -41,21 +41,20 @@ def query_groq(prompt, system_role):
         return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_bid_links(url):
-    # Expanded keywords to ensure Cabling and Infrastructure are captured
-    tech_keywords = [
-        "computer", "software", "network", "telecommunication", "hardware", 
-        "radio", "data", "ev ", "cabling", "fiber", "infrastructure", "wireless"
-    ]
+    tech_keywords = ["computer", "software", "network", "telecommunication", "hardware", "radio", "data", "ev ", "cabling", "fiber"]
     found_links = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=12)
         soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # Look for the specific detail links
         all_links = soup.find_all('a', href=True)
         for link in all_links:
             href = link['href']
-            if "biddetail" in href.lower():
+            if "biddetail" in href.lower() or "abstract" in href.lower():
                 found_links.append(urljoin(url, href))
+
         elements = soup.find_all(['span', 'td', 'p', 'li', 'div'])
         filtered_text = " ".join([el.get_text(strip=True) for el in elements if any(key in el.get_text().lower() for key in tech_keywords)])
         return filtered_text[:4000], list(set(found_links))
@@ -81,9 +80,13 @@ bid_links = []
 if input_mode == "Live Portal Link":
     url_input = st.text_input("Paste Portal URL:")
     if url_input:
-        with st.spinner("Analyzing..."):
-            final_text, bid_links = scrape_url_with_bid_links(url_input)
+        # Store for the overview card
+        st.session_state.active_link = url_input 
+        with st.spinner("Analyzing infrastructure data..."):
+            final_text, scraped_links = scrape_url_with_bid_links(url_input)
+            bid_links = scraped_links
 else:
+    st.session_state.active_link = None
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
     if uploaded_file:
         reader = PdfReader(uploaded_file)
@@ -96,33 +99,32 @@ if final_text:
 
     with col1:
         if st.button("Bid Overview"):
-            role = "You are a professional advisor who simplifies technical government bids."
-            # INSTRUCTION: Added focus on 'Improvement' and 'Connectivity'
+            role = "You are an expert at explaining government technology projects in clear, substantial, but simple language."
             prompt = (
-                f"Explain this project simply. Follow this structure:\n"
-                f"1. **The Big Picture**: Start with 'This bid is about...' "
-                f"Explain how this project will improve city infrastructure or connectivity (e.g., faster data, better communication).\n"
-                f"2. **What is Needed**: Describe the technical services like cabling, telecommunications, or networking equipment.\n"
-                f"3. **Who Can Apply**: Requirements for the vendor (experience with similar city projects, certifications).\n"
-                f"Text: {final_text}"
+                f"Provide a substantial but easy-to-read summary. Use these headings:\n\n"
+                f"**The Big Picture**: Start with 'This project focuses on...' and explain the 'Why' (e.g., to improve city speed, safety, or data flow).\n\n"
+                f"**The Technical Scope**: Describe the specific cabling, software, or hardware needed.\n\n"
+                f"**Vendor Expectations**: Explain what kind of experience or certifications the buyer wants. "
+                f"Keep it professional but use short, clear sentences. Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 📖 Bid Overview")
-                if bid_links:
-                    for link in bid_links[:2]: st.markdown(f"🔗 [Direct Bid Link]({link})")
+                
+                # --- LINK LOGIC ---
+                if st.session_state.get('active_link'):
+                    st.markdown(f"🔗 **[Click here for Original Bid Link]({st.session_state.active_link})**")
+                elif bid_links:
+                    st.markdown(f"🔗 **[Click here for Direct Bid Detail]({bid_links[0]})**")
+                
+                st.divider()
                 st.write(ans)
                 if "⚠️" not in ans: st.session_state.total_saved += 10
 
     with col2:
         if st.button("Technical Specs"):
-            # INSTRUCTION: Explicitly include Cabling and Telecomm
-            role = "You are a strict technical infrastructure auditor."
-            prompt = (
-                f"Identify only the IT hardware, software, and physical infrastructuregear EXPLICITLY mentioned. "
-                f"Include: Cabling (Cat6, Fiber), Telecommunications systems, Networking hardware, and Data systems. "
-                f"STRICTLY DO NOT suggest items. Text: {final_text}"
-            )
+            role = "Strict Technical Infrastructure Auditor."
+            prompt = f"Identify only the physical hardware, cabling (Fiber/Cat6), networking gear, and software EXPLICITLY mentioned. No suggestions. Text: {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 🛠️ Equipment List")
@@ -131,7 +133,7 @@ if final_text:
 
     with col3:
         if st.button("Bid Submission"):
-            ans, dur = query_groq(f"List deadlines and how to submit: {final_text}", "Procurement Advisor.")
+            ans, dur = query_groq(f"List deadlines and submission steps found in the text: {final_text}", "Procurement Advisor.")
             with st.container(border=True):
                 st.markdown("#### 📝 Submission Guide")
                 st.write(ans)
