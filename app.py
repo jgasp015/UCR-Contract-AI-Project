@@ -9,10 +9,16 @@ from urllib.parse import urljoin
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract AI", layout="wide")
 
-# Initialize Session States so the app "remembers" your choice
+# Initialize Session States for Persistant Data
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 if 'active_bid_link' not in st.session_state: st.session_state.active_bid_link = None
+
+# Storage for the AI responses so they "Stick"
+if 'summary_ans' not in st.session_state: st.session_state.summary_ans = None
+if 'tech_ans' not in st.session_state: st.session_state.tech_ans = None
+if 'submission_ans' not in st.session_state: st.session_state.submission_ans = None
+if 'compliance_ans' not in st.session_state: st.session_state.compliance_ans = None
 
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
@@ -65,75 +71,88 @@ st.title("🏛️ Public Sector Contract AI")
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
-    # Reset Button for Convenience
-    if st.button("Clear / New Search"):
-        st.session_state.active_bid_text = None
+    
+    if st.button("🔄 Start New Search"):
+        # Clear everything
+        for key in ['active_bid_text', 'active_bid_link', 'summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans']:
+            st.session_state[key] = None
         st.rerun()
-    st.caption("UCR Master of Science in Engineering - Jeffrey Gaspar")
+    st.caption("UCR Master of Science - Jeffrey Gaspar")
 
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
-# --- DATA LOADING ---
-if input_mode == "Live Portal Link":
-    url_input = st.text_input("Paste Portal URL:")
-    if url_input and not st.session_state.active_bid_text:
-        with st.spinner("Finding tech bids..."):
-            bids = scrape_multi_it_bids(url_input)
-            for idx, bid in enumerate(bids):
-                with st.container(border=True):
-                    st.write(f"### 📦 {bid['name']}")
-                    st.markdown(f"🔗 [Direct Bid Link]({bid['link']})")
-                    # Store choice in session_state when clicked
-                    if st.button(f"Analyze Specific Bid", key=f"btn_{idx}"):
-                        st.session_state.active_bid_text = bid['full_text']
-                        st.session_state.active_bid_link = bid['link']
-                        st.rerun()
+# --- DATA LOADING PHASE ---
+if not st.session_state.active_bid_text:
+    if input_mode == "Live Portal Link":
+        url_input = st.text_input("Paste Portal URL:")
+        if url_input:
+            with st.spinner("Finding tech bids..."):
+                bids = scrape_multi_it_bids(url_input)
+                for idx, bid in enumerate(bids):
+                    with st.container(border=True):
+                        st.write(f"### 📦 {bid['name']}")
+                        if st.button(f"Analyze Specific Bid", key=f"btn_{idx}"):
+                            st.session_state.active_bid_text = bid['full_text']
+                            st.session_state.active_bid_link = bid['link']
+                            st.rerun()
+    else:
+        uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+        manual_url = st.text_input("Paste Source Link for this PDF (Optional):")
+        if uploaded_file:
+            reader = PdfReader(uploaded_file)
+            pages = [0, len(reader.pages)-1] if len(reader.pages) > 1 else [0]
+            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:4000]
+            st.session_state.active_bid_link = manual_url
+            st.rerun()
 
-else:
-    uploaded_file = st.file_uploader("Upload PDF", type="pdf")
-    manual_url = st.text_input("Paste Source Link for this PDF (Optional):")
-    if uploaded_file and not st.session_state.active_bid_text:
-        reader = PdfReader(uploaded_file)
-        pages = [0, len(reader.pages)-1] if len(reader.pages) > 1 else [0]
-        st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:4000]
-        st.session_state.active_bid_link = manual_url
-
-# --- 4. ANALYSIS AREA (The 4 Tabs) ---
+# --- 4. ANALYSIS AREA (Persistent Tabs) ---
 if st.session_state.active_bid_text:
-    st.success(f"Successfully loaded bid for analysis.")
+    st.success(f"Analysis Data Loaded.")
     st.divider()
     
     col1, col2, col3, col4 = st.columns(4)
     
+    # Column 1: Overview
     with col1:
-        if st.button("Bid Overview"):
-            ans = query_groq(f"Summarize this project (Big Picture, Scope, Who Can Apply): {st.session_state.active_bid_text}", "Professional advisor.")
+        if st.button("Generate Bid Overview"):
+            st.session_state.summary_ans = query_groq(f"Summarize project (Big Picture, Scope, Who Can Apply): {st.session_state.active_bid_text}", "Advisor.")
+            st.session_state.total_saved += 10
+        
+        if st.session_state.summary_ans:
             with st.container(border=True):
                 st.markdown("#### 📖 Bid Overview")
-                st.write(f"**Source Link:** {st.session_state.active_bid_link if st.session_state.active_bid_link else 'Not Available'}")
-                st.write(ans)
-                st.session_state.total_saved += 10
+                st.write(f"**Link:** {st.session_state.active_bid_link}")
+                st.write(st.session_state.summary_ans)
 
+    # Column 2: Tech Specs
     with col2:
-        if st.button("Technical Specs"):
-            ans = query_groq(f"List ONLY the IT hardware, software, and cabling gear: {st.session_state.active_bid_text}", "IT Auditor.")
+        if st.button("Extract Tech Specs"):
+            st.session_state.tech_ans = query_groq(f"List ONLY IT hardware, cabling, and software: {st.session_state.active_bid_text}", "IT Auditor.")
+            st.session_state.total_saved += 20
+        
+        if st.session_state.tech_ans:
             with st.container(border=True):
                 st.markdown("#### 🛠️ Equipment List")
-                st.write(ans)
-                st.session_state.total_saved += 20
+                st.write(st.session_state.tech_ans)
 
+    # Column 3: Submission
     with col3:
-        if st.button("Bid Submission"):
-            ans = query_groq(f"What are the deadlines and how do I submit? {st.session_state.active_bid_text}", "Procurement Advisor.")
+        if st.button("Get Submission Info"):
+            st.session_state.submission_ans = query_groq(f"Deadlines and how to submit: {st.session_state.active_bid_text}", "Procurement Advisor.")
+            st.session_state.total_saved += 15
+        
+        if st.session_state.submission_ans:
             with st.container(border=True):
                 st.markdown("#### 📝 Submission Guide")
-                st.write(ans)
-                st.session_state.total_saved += 15
+                st.write(st.session_state.submission_ans)
 
+    # Column 4: Compliance
     with col4:
-        if st.button("Compliance Requirements"):
-            ans = query_groq(f"Identify all mandatory compliance and reporting rules: {st.session_state.active_bid_text}", "Compliance Auditor.")
+        if st.button("Check Compliance"):
+            st.session_state.compliance_ans = query_groq(f"Identify mandatory compliance and reporting rules: {st.session_state.active_bid_text}", "Compliance Auditor.")
+            st.session_state.total_saved += 15
+        
+        if st.session_state.compliance_ans:
             with st.container(border=True):
                 st.markdown("#### ⚖️ Compliance Checklist")
-                st.write(ans)
-                st.session_state.total_saved += 15
+                st.write(st.session_state.compliance_ans)
