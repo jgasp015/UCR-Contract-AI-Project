@@ -19,6 +19,7 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def query_groq(prompt, system_role):
+    """Universal function to talk to Llama-3.1 via Groq."""
     start_time = time.time()
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -40,6 +41,7 @@ def query_groq(prompt, system_role):
         return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_broad_tech_filter(url):
+    """Broad Tech Scraper with IT/EV/Data keywords."""
     tech_keywords = [
         "computer", "laptop", "server", "software", "database", "cloud", "data", "storage",
         "network", "telecommunication", "broadband", "wi-fi", "ethernet", "radio", "voip", "cabling", "fiber",
@@ -71,7 +73,6 @@ with st.sidebar:
         st.session_state.total_saved = 0
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     
-    # NEW: Display Source Link if available
     if 'current_url' in st.session_state and st.session_state.current_url:
         st.divider()
         st.write("🔗 **Active Source Link:**")
@@ -87,12 +88,12 @@ final_text = ""
 if input_mode == "Live Portal Link":
     url_input = st.text_input("Paste Portal URL:")
     if url_input:
-        st.session_state.current_url = url_input # Store URL for the link button
+        st.session_state.current_url = url_input
         with st.spinner("Scraping Technology Data..."):
             final_text = scrape_url_with_broad_tech_filter(url_input)
             st.success("Technology context captured!")
 else:
-    st.session_state.current_url = None # Reset if uploading PDF
+    st.session_state.current_url = None
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
     if uploaded_file:
         reader = PdfReader(uploaded_file)
@@ -106,13 +107,13 @@ if final_text and "Error" not in final_text:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        # RENAMED: More professional heading
-        if st.button("Public Overview"):
-            role = "You are a professional clear-communication expert."
-            prompt = f"Provide a high-level, plain-language summary of this project's goals. Use clear bullet points and avoid jargon: {final_text}"
+        # REPLACED: "Public Overview" is now "Bid Overview"
+        if st.button("Bid Overview"):
+            role = "You are a professional clear-communication expert for government procurement."
+            prompt = f"Provide a high-level overview of this bid's goals and purpose. Use clear bullet points and avoid complex jargon: {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
-                st.markdown("#### 📖 Public Overview")
+                st.markdown("#### 📖 Bid Overview")
                 st.write(ans)
                 st.caption(f"Speed: {dur}s | Saved: 10m")
                 if "⚠️" not in ans: st.session_state.total_saved += 10
@@ -142,7 +143,7 @@ if final_text and "Error" not in final_text:
     with col4:
         if st.button("Contract Reporting"):
             role = "Contract Compliance Manager."
-            prompt = f"Identify ONGOING reporting requirements AFTER the contract is awarded (monthly reports, quarterly updates, portal uploads): {final_text}"
+            prompt = f"Identify ONGOING reporting requirements AFTER award (monthly reports, quarterly updates, etc.): {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 📅 Ongoing Reporting")
