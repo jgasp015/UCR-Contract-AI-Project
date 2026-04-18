@@ -47,14 +47,11 @@ def scrape_url_with_bid_links(url):
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=12)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Look for the specific detail links
         all_links = soup.find_all('a', href=True)
         for link in all_links:
             href = link['href']
             if "biddetail" in href.lower() or "abstract" in href.lower():
                 found_links.append(urljoin(url, href))
-
         elements = soup.find_all(['span', 'td', 'p', 'li', 'div'])
         filtered_text = " ".join([el.get_text(strip=True) for el in elements if any(key in el.get_text().lower() for key in tech_keywords)])
         return filtered_text[:4000], list(set(found_links))
@@ -75,19 +72,20 @@ with st.sidebar:
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
 final_text = ""
-bid_links = []
+display_link = ""
 
 if input_mode == "Live Portal Link":
     url_input = st.text_input("Paste Portal URL:")
     if url_input:
-        # Store for the overview card
-        st.session_state.active_link = url_input 
-        with st.spinner("Analyzing infrastructure data..."):
-            final_text, scraped_links = scrape_url_with_bid_links(url_input)
-            bid_links = scraped_links
+        display_link = url_input
+        with st.spinner("Analyzing portal..."):
+            final_text, _ = scrape_url_with_bid_links(url_input)
 else:
-    st.session_state.active_link = None
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+    # NEW: Manual link entry for PDF mode
+    manual_url = st.text_input("Paste Source Link for this PDF (Optional):")
+    display_link = manual_url if manual_url else "Not Available"
+    
     if uploaded_file:
         reader = PdfReader(uploaded_file)
         pages = [0, len(reader.pages)-1] if len(reader.pages) > 1 else [0]
@@ -99,23 +97,23 @@ if final_text:
 
     with col1:
         if st.button("Bid Overview"):
-            role = "You are an expert at explaining government technology projects in clear, substantial, but simple language."
+            role = "Professional advisor using clear, substantial, but simple language."
             prompt = (
-                f"Provide a substantial but easy-to-read summary. Use these headings:\n\n"
-                f"**The Big Picture**: Start with 'This project focuses on...' and explain the 'Why' (e.g., to improve city speed, safety, or data flow).\n\n"
-                f"**The Technical Scope**: Describe the specific cabling, software, or hardware needed.\n\n"
-                f"**Vendor Expectations**: Explain what kind of experience or certifications the buyer wants. "
-                f"Keep it professional but use short, clear sentences. Text: {final_text}"
+                f"Explain this project focusing on infrastructure and technology improvement. Sections:\n\n"
+                f"**The Big Picture**: Start with 'This project focuses on...' \n\n"
+                f"**The Technical Scope**: Describe the equipment or cabling needed.\n\n"
+                f"**Vendor Expectations**: Explain the required experience.\n\n"
+                f"Use plain, direct English. Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 📖 Bid Overview")
                 
-                # --- LINK LOGIC ---
-                if st.session_state.get('active_link'):
-                    st.markdown(f"🔗 **[Click here for Original Bid Link]({st.session_state.active_link})**")
-                elif bid_links:
-                    st.markdown(f"🔗 **[Click here for Direct Bid Detail]({bid_links[0]})**")
+                # --- DYNAMIC LINK DISPLAY ---
+                if "http" in display_link:
+                    st.markdown(f"**Bid Link:** [Click here to view original]({display_link})")
+                else:
+                    st.write(f"**Bid Link:** {display_link}")
                 
                 st.divider()
                 st.write(ans)
@@ -124,7 +122,7 @@ if final_text:
     with col2:
         if st.button("Technical Specs"):
             role = "Strict Technical Infrastructure Auditor."
-            prompt = f"Identify only the physical hardware, cabling (Fiber/Cat6), networking gear, and software EXPLICITLY mentioned. No suggestions. Text: {final_text}"
+            prompt = f"List ONLY the hardware, cabling, networking, and software EXPLICITLY mentioned. No suggestions. Text: {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 🛠️ Equipment List")
@@ -133,7 +131,7 @@ if final_text:
 
     with col3:
         if st.button("Bid Submission"):
-            ans, dur = query_groq(f"List deadlines and submission steps found in the text: {final_text}", "Procurement Advisor.")
+            ans, dur = query_groq(f"List deadlines and submission steps: {final_text}", "Procurement Advisor.")
             with st.container(border=True):
                 st.markdown("#### 📝 Submission Guide")
                 st.write(ans)
