@@ -40,36 +40,23 @@ def query_groq(prompt, system_role):
         return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_broad_tech_filter(url):
-    """
-    Expanded keyword list to capture the full spectrum of IT, 
-    Telecomm, Data, and EV technology.
-    """
     tech_keywords = [
-        # Computing & Data
         "computer", "laptop", "server", "software", "database", "cloud", "data", "storage",
-        # Networking & Telecom
         "network", "telecommunication", "broadband", "wi-fi", "ethernet", "radio", "voip", "cabling", "fiber",
-        # Hardware & Office
         "hardware", "printer", "scanner", "copier", "peripheral", "monitor",
-        # Future Tech & Infrastructure
         "electric vehicle", "ev charging", "smart city", "iot", "security", "cyber", "electronic"
     ]
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=12)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # We look for all text-containing elements
         elements = soup.find_all(['span', 'a', 'td', 'p', 'li', 'h3'])
         filtered_results = []
-        
         for el in elements:
             text = el.get_text(strip=True)
-            # Match against our expanded tech dictionary
             if any(key in text.lower() for key in tech_keywords):
                 if text not in filtered_results and len(text) > 5:
                     filtered_results.append(text)
-        
         return " | ".join(filtered_results)[:7000] if filtered_results else "No relevant Tech/IT content found."
     except Exception as e:
         return f"Error: {str(e)}"
@@ -112,30 +99,43 @@ if final_text and "Error" not in final_text:
 
     with col1:
         if st.button("Simplify for Citizens"):
-            role = "You are a plain-language advocate for tech policy."
-            prompt = f"Summarize the technology goals of this project in 2 sentences. Focus on IT, EVs, or Data: {final_text}"
+            # UPDATED: Focus on bullet points and straightforward "Plain English"
+            role = "You are a professional clear-communication expert for local government."
+            prompt = (
+                f"Explain the main goal of this project for a regular citizen. "
+                f"Use bullet points, keep the language extremely straightforward, "
+                f"and avoid all technical or legal jargon. Ensure it is easy to read at a glance: {final_text}"
+            )
             ans, dur = query_groq(prompt, role)
-            st.info(ans)
-            if "⚠️" not in ans: st.session_state.total_saved += 5
+            with st.container(border=True):
+                st.markdown("#### 📖 Citizen Summary")
+                st.write(ans)
+                st.caption(f"AI Speed: {dur}s | Saved: 10m")
+                if "⚠️" not in ans: st.session_state.total_saved += 10
 
     with col2:
         if st.button("Extract Technical Specs"):
             role = "You are a senior IT & Infrastructure Auditor."
-            # Explicitly telling the AI to look for the full range of tech
             prompt = (
                 f"Extract a list of all technical equipment. This includes: "
                 f"Computers, EV Charging Stations, Networking gear, Printers, and Software. "
-                f"Ignore all non-technical items like food, fuel, or construction. "
+                f"Ignore all non-technical items. "
                 f"Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
-            st.success(ans)
-            if "⚠️" not in ans: st.session_state.total_saved += 15
+            with st.container(border=True):
+                st.markdown("#### 🛠️ Equipment List")
+                st.write(ans)
+                st.caption(f"AI Speed: {dur}s | Saved: 20m")
+                if "⚠️" not in ans: st.session_state.total_saved += 20
 
     with col3:
         if st.button("Reporting Guidance"):
             role = "Technical Compliance Officer."
             prompt = f"What are the technical reporting deadlines and vendor requirements? {final_text}"
             ans, dur = query_groq(prompt, role)
-            st.warning(ans)
-            if "⚠️" not in ans: st.session_state.total_saved += 10
+            with st.container(border=True):
+                st.markdown("#### 📅 Compliance Checklist")
+                st.write(ans)
+                st.caption(f"AI Speed: {dur}s | Saved: 15m")
+                if "⚠️" not in ans: st.session_state.total_saved += 15
