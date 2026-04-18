@@ -19,7 +19,7 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def query_groq(prompt, system_role):
-    """Sends the request to Groq and returns the response plus the time it took."""
+    """Sends the filtered data to Groq and tracks processing speed."""
     start_time = time.time()
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -43,20 +43,36 @@ def query_groq(prompt, system_role):
     except Exception as e:
         return f"⚠️ Connection Error: {str(e)}", 0
 
-def scrape_url(url):
-    """BeautifulSoup logic to extract text from a live bidding portal."""
+def scrape_url_with_it_filter(url):
+    """
+    Scrapes the portal but ONLY keeps text related to IT keywords.
+    This fulfills the 'Data Accuracy' goal of the project.
+    """
+    it_keywords = [
+        "computer", "laptop", "server", "software", "printer", "tablet",
+        "network", "internet", "telecommunication", "hardware", "wi-fi",
+        "ethernet", "cloud", "database", "security", "voip", "cabling"
+    ]
     try:
         headers = {"User-Agent": "Mozilla/5.0 (UCR Research Project)"}
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Strip away navigation, scripts, and footers
-        for tags in soup(["script", "style", "nav", "footer", "header"]):
-            tags.decompose()
+        # Look for text in paragraphs, lists, and tables
+        blocks = soup.find_all(['p', 'li', 'td', 'h2', 'h3'])
+        
+        filtered_results = []
+        for block in blocks:
+            text = block.get_text(strip=True)
+            # Only keep the block if it contains an IT keyword
+            if any(key in text.lower() for key in it_keywords):
+                filtered_results.append(text)
+        
+        if not filtered_results:
+            return "No IT-related requirements found at this URL. Please try an SOW-specific link."
             
-        text = soup.get_text(separator=' ', strip=True)
-        return text[:6000] # Limits text to fit within AI context window
+        return " ".join(filtered_results)[:6000] 
     except Exception as e:
         return f"Error scraping URL: {str(e)}"
 
@@ -65,10 +81,10 @@ def scrape_url(url):
 st.title("🏛️ Public Sector Contract Simplifier")
 st.markdown("### Aiming for 90% Data Accuracy & 30% Efficiency Gains")
 
-# Sidebar for Project Theory & Metrics
+# Sidebar for Metrics (Project requirement: Assess time saved)
 with st.sidebar:
     st.header("Project Performance")
-    st.write("**Theory:** Based on Ladeur (2007) - procedural context in public contracts.")
+    st.write("**Thesis Context:** Ladeur (2007) - Extracting procedural context from administrative law.")
     
     if 'total_saved' not in st.session_state:
         st.session_state.total_saved = 0
@@ -77,70 +93,69 @@ with st.sidebar:
     st.divider()
     st.caption("UCR Master of Science in Engineering - Jeffrey Gaspar")
 
-# --- STEP 1: DATA INPUT ---
-# This is the 'Scraping Part' you were looking for!
-input_mode = st.radio("Choose Data Source:", ["Live Portal Link (BeautifulSoup)", "Upload PDF"])
+# --- STEP 1: DATA INPUT (THE SCRAPER) ---
+input_mode = st.radio("Choose Data Source:", ["Live Portal Link (IT-Filtered Scrape)", "Upload PDF"])
 
-raw_contract_text = ""
+final_text = ""
 
-if input_mode == "Live Portal Link (BeautifulSoup)":
-    url_input = st.text_input("Paste the Bidding Portal URL (e.g., City of LA):")
+if input_mode == "Live Portal Link (IT-Filtered Scrape)":
+    url_input = st.text_input("Paste the Bidding Portal URL:")
     if url_input:
-        with st.spinner("BeautifulSoup is scanning the portal..."):
-            raw_contract_text = scrape_url(url_input)
-            if "Error" not in raw_contract_text:
-                st.success("Web data successfully captured from the portal!")
+        with st.spinner("BeautifulSoup is filtering for IT keywords..."):
+            final_text = scrape_url_with_it_filter(url_input)
+            if "Error" not in final_text and "No IT-related" not in final_text:
+                st.success("Targeted IT data successfully captured!")
+            elif "No IT-related" in final_text:
+                st.warning(final_text)
             else:
-                st.error(raw_contract_text)
+                st.error(final_text)
 
 else:
     uploaded_file = st.file_uploader("Upload a Contract (PDF)", type="pdf")
     if uploaded_file:
         reader = PdfReader(uploaded_file)
-        # TOKEN LIMIT FIX: Read First, Middle, and Last pages
+        # Optimized for SOWs: First, Middle, and Last pages
         pages = [0, len(reader.pages)//2, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
-        raw_contract_text = "".join([reader.pages[i].extract_text() for i in pages])
-        st.success(f"PDF processed ({len(reader.pages)} pages detected).")
+        final_text = "".join([reader.pages[i].extract_text() for i in pages])
+        st.success(f"PDF processed ({len(reader.pages)} pages).")
 
 # --- STEP 2: ANALYSIS ACTIONS ---
-if raw_contract_text:
+if final_text and "Error" not in final_text:
     st.divider()
-    st.info("Select an analysis type below to process the captured contract data.")
-    
     col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("Simplify for Citizens"):
-            role = "You are a plain-language expert. Convert legal jargon into 8th-grade level English."
-            prompt = f"Summarize the goal of this bid in 3 simple sentences: {raw_contract_text}"
+            role = "You are a plain-language advocate."
+            prompt = f"Explain what IT services or hardware this bid is asking for in 3 bullet points: {final_text}"
             with st.spinner("Simplifying..."):
                 ans, dur = query_groq(prompt, role)
                 with st.container(border=True):
                     st.markdown("#### 📖 Citizen Summary")
                     st.write(ans)
-                    st.caption(f"AI Speed: {dur}s | Est. Manual Time: 10m")
+                    st.caption(f"AI Speed: {dur}s | Saved: 10m")
                     st.session_state.total_saved += 10
 
     with col2:
         if st.button("Extract Technical Specs"):
-            role = "You are a technical procurement expert identifying hardware and software brands."
-            prompt = f"List every specific piece of equipment, computer, or software mentioned. Provide a shopping list: {raw_contract_text}"
-            with st.spinner("Scanning for Hardware..."):
+            role = "You are a technical procurement expert."
+            prompt = f"List every computer, printer, brand, or piece of software mentioned as a shopping list: {final_text}"
+            with st.spinner("Scanning Hardware..."):
                 ans, dur = query_groq(prompt, role)
                 with st.container(border=True):
                     st.markdown("#### 🛠️ Equipment List")
                     st.write(ans)
-                    st.caption(f"AI Speed: {dur}s | Est. Manual Time: 20m")
+                    st.caption(f"AI Speed: {dur}s | Saved: 20m")
                     st.session_state.total_saved += 20
 
     with col3:
         if st.button("Reporting Guidance"):
-            role = "You are a compliance officer. Identify reporting deadlines and procedural vendor obligations."
-            prompt = f"Identify every reporting deadline. Tell the vendor exactly what they must submit monthly or quarterly: {raw_contract_text}"
+            role = "You are a compliance officer."
+            prompt = f"Find the IT reporting deadlines. Tell the vendor exactly what they must submit and when: {final_text}"
             with st.spinner("Analyzing Deadlines..."):
                 ans, dur = query_groq(prompt, role)
                 with st.container(border=True):
                     st.markdown("#### 📅 Compliance Checklist")
                     st.write(ans)
-                    st.caption(f"AI Speed: {dur}s | Est. Manual Time: 15m")
+                    st.caption(f"AI Speed: {dur}s | Saved: 15m")
                     st.session_state.total_saved += 15
