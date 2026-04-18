@@ -92,13 +92,14 @@ if final_text:
 
     with col1:
         if st.button("Bid Overview"):
-            # REWRITTEN PROMPT: Focus on the "Big Picture" first
-            role = "You are a helpful assistant who explains complex government projects in simple, everyday language."
+            # UPDATED PROMPT: More context, structured "Plain English" sections
+            role = "You are a professional advisor who translates complex government bids into easy-to-read executive summaries."
             prompt = (
-                f"Explain this project in a few short, simple sentences. "
-                f"Start with: 'This bid is about...' "
-                f"Then, list 3-4 bullet points describing what the buyer is looking for in a vendor (e.g., experience, specific skills). "
-                f"Avoid using technical codes or long numbers. Text: {final_text}"
+                f"Create a helpful summary of this bid. Use three short sections:\n"
+                f"1. **The Big Picture**: Start with 'This bid is about...' and explain the main goal in simple terms.\n"
+                f"2. **What is Needed**: Briefly describe the products or services being bought.\n"
+                f"3. **Who Can Apply**: Summarize what the buyer wants in a vendor (experience, certifications, or specific skills).\n"
+                f"Keep the words simple but provide enough detail to understand the project's scope. Text: {final_text}"
             )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
