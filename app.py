@@ -62,7 +62,8 @@ def scrape_url_with_broad_tech_filter(url):
         return f"Error: {str(e)}"
 
 # --- 3. UI ---
-st.title("🏛️ Public Sector Contract Simplifier")
+st.title("🏛️ Public Sector Contract AI")
+st.markdown("### Efficiency Analysis & Procedural Transparency")
 
 with st.sidebar:
     st.header("Project Performance")
@@ -77,14 +78,11 @@ input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 final_text = ""
 
 if input_mode == "Live Portal Link":
-    url_input = st.text_input("Paste Portal URL:", placeholder="Paste Chicago, LA, or other bidding links...")
+    url_input = st.text_input("Paste Portal URL:")
     if url_input:
-        with st.spinner("Broad Tech Filter scanning..."):
+        with st.spinner("Scraping Technology Data..."):
             final_text = scrape_url_with_broad_tech_filter(url_input)
-            if "No relevant" in final_text:
-                st.warning(final_text)
-            else:
-                st.success("Technology context captured!")
+            st.success("Technology context captured!")
 else:
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
     if uploaded_file:
@@ -95,47 +93,53 @@ else:
 
 if final_text and "Error" not in final_text:
     st.divider()
-    col1, col2, col3 = st.columns(3)
+    
+    # FOUR COLUMNS for complete analysis
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if st.button("Simplify for Citizens"):
-            # UPDATED: Focus on bullet points and straightforward "Plain English"
-            role = "You are a professional clear-communication expert for local government."
-            prompt = (
-                f"Explain the main goal of this project for a regular citizen. "
-                f"Use bullet points, keep the language extremely straightforward, "
-                f"and avoid all technical or legal jargon. Ensure it is easy to read at a glance: {final_text}"
-            )
+            role = "You are a professional clear-communication expert."
+            prompt = f"Explain the main goal of this project for a regular citizen using straightforward bullet points: {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 📖 Citizen Summary")
                 st.write(ans)
-                st.caption(f"AI Speed: {dur}s | Saved: 10m")
+                st.caption(f"Speed: {dur}s | Saved: 10m")
                 if "⚠️" not in ans: st.session_state.total_saved += 10
 
     with col2:
-        if st.button("Extract Technical Specs"):
+        if st.button("Technical Specs"):
             role = "You are a senior IT & Infrastructure Auditor."
-            prompt = (
-                f"Extract a list of all technical equipment. This includes: "
-                f"Computers, EV Charging Stations, Networking gear, Printers, and Software. "
-                f"Ignore all non-technical items. "
-                f"Text: {final_text}"
-            )
+            prompt = f"Extract a list of all technical equipment (Computers, EVs, Networking, Software). Ignore non-tech items: {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 🛠️ Equipment List")
                 st.write(ans)
-                st.caption(f"AI Speed: {dur}s | Saved: 20m")
+                st.caption(f"Speed: {dur}s | Saved: 20m")
                 if "⚠️" not in ans: st.session_state.total_saved += 20
 
     with col3:
-        if st.button("Reporting Guidance"):
-            role = "Technical Compliance Officer."
-            prompt = f"What are the technical reporting deadlines and vendor requirements? {final_text}"
+        if st.button("Bid Submission"):
+            role = "Procurement Advisor."
+            prompt = f"Identify the specific deadlines and requirements to SUBMIT this bid (dates, portals, required forms): {final_text}"
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
-                st.markdown("#### 📅 Compliance Checklist")
+                st.markdown("#### 📝 Submission Guide")
                 st.write(ans)
-                st.caption(f"AI Speed: {dur}s | Saved: 15m")
+                st.caption(f"Speed: {dur}s | Saved: 15m")
+                if "⚠️" not in ans: st.session_state.total_saved += 15
+
+    with col4:
+        if st.button("Contract Reporting"):
+            role = "Contract Compliance Manager."
+            prompt = (
+                f"Identify ONGOING reporting requirements AFTER the contract is awarded. "
+                f"Look for monthly reports, quarterly status updates, portal uploads, or email requirements: {final_text}"
+            )
+            ans, dur = query_groq(prompt, role)
+            with st.container(border=True):
+                st.markdown("#### 📅 Ongoing Reporting")
+                st.write(ans)
+                st.caption(f"Speed: {dur}s | Saved: 15m")
                 if "⚠️" not in ans: st.session_state.total_saved += 15
