@@ -30,38 +30,33 @@ def query_groq(prompt, system_role):
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
         data = response.json()
         duration = round(time.time() - start_time, 2)
-        return data['choices'][0]['message']['content'], duration
-    except:
-        return "⚠️ Error connecting to AI.", 0
+        
+        if "choices" in data:
+            return data['choices'][0]['message']['content'], duration
+        else:
+            # This captures specific API errors like "Rate Limit"
+            error_msg = data.get('error', {}).get('message', 'Unknown AI Error')
+            return f"⚠️ Groq API says: {error_msg}", 0
+    except Exception as e:
+        return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_strict_filter(url):
-    """
-    Targets the Chicago Oracle portal. 
-    Added 'radio' to keywords to capture telecommunications.
-    """
-    it_keywords = [
-        "computer", "software", "network", "telecommunication", 
-        "server", "technology", "hardware", "radio", "cabling"
-    ]
+    it_keywords = ["computer", "software", "network", "telecommunication", "server", "technology", "hardware", "radio", "cabling"]
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Oracle tables often use 'span' or 'a' tags for bid titles
-        elements = soup.find_all(['span', 'a', 'td'])
+        elements = soup.find_all(['span', 'a', 'td', 'p'])
         filtered_results = []
-        
         for el in elements:
             text = el.get_text(strip=True)
             if any(key in text.lower() for key in it_keywords):
                 if text not in filtered_results:
                     filtered_results.append(text)
-        
-        return " | ".join(filtered_results)[:7000] if filtered_results else "No IT content found."
+        return " | ".join(filtered_results)[:6000] if filtered_results else "No IT content found."
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -76,56 +71,46 @@ with st.sidebar:
     st.divider()
     st.caption("UCR Master of Science in Engineering - Jeffrey Gaspar")
 
-# DATA SOURCE SELECTION
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
 final_text = ""
 
 if input_mode == "Live Portal Link":
-    url_input = st.text_input("Paste Portal URL:", placeholder="https://eprocurement.cityofchicago.org/...")
+    url_input = st.text_input("Paste Portal URL:", placeholder="https://...")
     if url_input:
         with st.spinner("Scraping & Filtering..."):
             final_text = scrape_url_with_strict_filter(url_input)
             if "No IT content" in final_text:
                 st.warning(final_text)
             else:
-                st.success("Scrape complete. IT context found.")
+                st.success("Scrape complete.")
 else:
     uploaded_file = st.file_uploader("Upload PDF", type="pdf")
     if uploaded_file:
         reader = PdfReader(uploaded_file)
-        final_text = "".join([p.extract_text() for p in reader.pages[:3]])
+        # Grab first 2 and last page to stay under token limits
+        pages_to_read = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
+        final_text = "".join([reader.pages[i].extract_text() for i in pages_to_read])
+        st.success("PDF analyzed successfully.")
 
-# ANALYSIS BUTTONS
 if final_text and "Error" not in final_text:
     st.divider()
     col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("Simplify for Citizens"):
-            role = "You are a plain-language expert."
-            prompt = f"Summarize the IT/Radio goal of this bid in 2 sentences: {final_text}"
-            ans, dur = query_groq(prompt, role)
+            ans, dur = query_groq(f"Summarize this bid in 2 sentences: {final_text}", "You are a plain-language expert.")
             st.info(ans)
-            st.session_state.total_saved += 5
+            if "⚠️" not in ans: st.session_state.total_saved += 5
 
     with col2:
         if st.button("Extract Technical Specs"):
-            role = "You are a hardware auditor."
-            # Instructing the AI that RADIOS count as IT Hardware
-            prompt = (
-                f"Identify IT gear, computers, or telecommunications equipment like Radios. "
-                f"Ignore chemicals, dogs, and construction. "
-                f"Text: {final_text}"
-            )
-            ans, dur = query_groq(prompt, role)
+            ans, dur = query_groq(f"List only IT/Radio equipment found here: {final_text}", "You are a hardware auditor.")
             st.success(ans)
-            st.session_state.total_saved += 15
+            if "⚠️" not in ans: st.session_state.total_saved += 15
 
     with col3:
         if st.button("Reporting Guidance"):
-            role = "Compliance officer."
-            prompt = f"Identify reporting deadlines for this project: {final_text}"
-            ans, dur = query_groq(prompt, role)
+            ans, dur = query_groq(f"What are the reporting deadlines? {final_text}", "Compliance officer.")
             st.warning(ans)
-            st.session_state.total_saved += 10
+            if "⚠️" not in ans: st.session_state.total_saved += 10
