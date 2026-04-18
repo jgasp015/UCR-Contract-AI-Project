@@ -19,7 +19,6 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def query_groq(prompt, system_role):
-    """Universal function to talk to Llama-3.1 via Groq."""
     start_time = time.time()
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -41,7 +40,6 @@ def query_groq(prompt, system_role):
         return f"⚠️ Connection Error: {str(e)}", 0
 
 def scrape_url_with_broad_tech_filter(url):
-    """Broad Tech Scraper with IT/EV/Data keywords."""
     tech_keywords = [
         "computer", "laptop", "server", "software", "database", "cloud", "data", "storage",
         "network", "telecommunication", "broadband", "wi-fi", "ethernet", "radio", "voip", "cabling", "fiber",
@@ -75,8 +73,8 @@ with st.sidebar:
     
     if 'current_url' in st.session_state and st.session_state.current_url:
         st.divider()
-        st.write("🔗 **Active Source Link:**")
-        st.link_button("View Original Bid Portal", st.session_state.current_url)
+        st.write("🔗 **Quick Link:**")
+        st.link_button("View Original Portal", st.session_state.current_url)
         
     st.divider()
     st.caption("UCR Master of Science in Engineering - Jeffrey Gaspar")
@@ -89,7 +87,7 @@ if input_mode == "Live Portal Link":
     url_input = st.text_input("Paste Portal URL:")
     if url_input:
         st.session_state.current_url = url_input
-        with st.spinner("Scraping Technology Data..."):
+        with st.spinner("Scraping..."):
             final_text = scrape_url_with_broad_tech_filter(url_input)
             st.success("Technology context captured!")
 else:
@@ -107,13 +105,20 @@ if final_text and "Error" not in final_text:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        # REPLACED: "Public Overview" is now "Bid Overview"
         if st.button("Bid Overview"):
-            role = "You are a professional clear-communication expert for government procurement."
-            prompt = f"Provide a high-level overview of this bid's goals and purpose. Use clear bullet points and avoid complex jargon: {final_text}"
+            role = "You are a professional who explains things using very simple, basic English for the general public."
+            # INSTRUCTION: Super straightforward, short words, simple bullets
+            prompt = (
+                f"Describe exactly what this bid is for using the simplest words possible. "
+                f"Use short sentences. Use bullet points. "
+                f"Explain it like you are talking to someone with no technical or legal training: {final_text}"
+            )
             ans, dur = query_groq(prompt, role)
             with st.container(border=True):
                 st.markdown("#### 📖 Bid Overview")
+                # NEW: Link displayed inside the card
+                if st.session_state.current_url:
+                    st.link_button("🔗 Open Original Bid Link", st.session_state.current_url)
                 st.write(ans)
                 st.caption(f"Speed: {dur}s | Saved: 10m")
                 if "⚠️" not in ans: st.session_state.total_saved += 10
