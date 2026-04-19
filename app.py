@@ -38,7 +38,11 @@ def query_groq(prompt, system_role):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=25)
         data = response.json()
-        return data['choices'][0]['message']['content'] if "choices" in data else "⚠️ AI Busy"
+        if "choices" in data:
+            return data['choices'][0]['message']['content']
+        else:
+            # Captures the 'Rate Limit' message directly from Groq
+            return f"⚠️ {data.get('error', {}).get('message', 'AI Busy')}"
     except:
         return "⚠️ Connection Error"
 
@@ -63,48 +67,45 @@ if not st.session_state.active_bid_text:
         if uploaded_file:
             reader = PdfReader(uploaded_file)
             pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
-            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:5000]
+            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:4000]
             st.session_state.active_bid_link = manual_url
             st.rerun()
-    else:
-        # Live Portal mode placeholder logic
-        url_input = st.text_input("Paste Portal URL:")
-        if url_input:
-            st.info("Portal scraping active. Select a bid to analyze.")
-            # (Insert portal scraping logic here if needed)
 
-# --- 4. INSTANT ANALYSIS AREA ---
+# --- 4. INSTANT ANALYSIS AREA (With Stability Throttling) ---
 if st.session_state.active_bid_text:
     
-    # Run analysis automatically if not already done
     if not st.session_state.summary_ans:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        with st.spinner("Analyzing contract..."):
+        with st.spinner("🤖 Analyzing contract lifecycle..."):
             # 1. Status
-            status_text.text("Checking contract status...")
+            status_text.text("Verifying contract status...")
             st.session_state.status_flag = query_groq(f"Is this bid Awarded, Closed, or Active? Answer in 1 word: {st.session_state.active_bid_text}", "Auditor.")
+            time.sleep(2) # Stability Pause
             progress_bar.progress(20)
             
             # 2. Overview
-            status_text.text("Summarizing project goals...")
-            st.session_state.summary_ans = query_groq(f"Summarize project scope simply: {st.session_state.active_bid_text}", "Advisor.")
+            status_text.text("Generating executive overview...")
+            st.session_state.summary_ans = query_groq(f"Summarize project scope: {st.session_state.active_bid_text}", "Advisor.")
+            time.sleep(2) # Stability Pause
             progress_bar.progress(40)
             
             # 3. Tech Specs
-            status_text.text("Extracting technical requirements...")
-            st.session_state.tech_ans = query_groq(f"List ONLY IT hardware/software/cabling: {st.session_state.active_bid_text}", "IT Auditor.")
+            status_text.text("Scanning for IT infrastructure...")
+            st.session_state.tech_ans = query_groq(f"List ONLY IT hardware/cabling/software: {st.session_state.active_bid_text}", "IT Auditor.")
+            time.sleep(2) # Stability Pause
             progress_bar.progress(60)
             
             # 4. Submission
-            status_text.text("Identifying deadlines...")
-            st.session_state.submission_ans = query_groq(f"Deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor.")
+            status_text.text("Extracting bid deadlines...")
+            st.session_state.submission_ans = query_groq(f"Identify deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor.")
+            time.sleep(2) # Stability Pause
             progress_bar.progress(80)
             
             # 5. Compliance & Award
-            status_text.text("Finalizing compliance and financial data...")
-            st.session_state.compliance_ans = query_groq(f"Mandatory rules and reporting: {st.session_state.active_bid_text}", "Auditor.")
+            status_text.text("Checking compliance and award history...")
+            st.session_state.compliance_ans = query_groq(f"Identify mandatory compliance and reporting: {st.session_state.active_bid_text}", "Auditor.")
             st.session_state.award_ans = query_groq(f"Identify Awarded Vendor and Amount: {st.session_state.active_bid_text}", "Financial Auditor.")
             progress_bar.progress(100)
             
@@ -113,7 +114,7 @@ if st.session_state.active_bid_text:
             progress_bar.empty()
             st.rerun()
 
-    # --- DISPLAY RESULTS ---
+    # --- RESULTS DISPLAY ---
     if st.session_state.status_flag and "Active" not in st.session_state.status_flag:
         st.error(f"🚨 STATUS: {st.session_state.status_flag.upper()}")
     else:
@@ -124,22 +125,17 @@ if st.session_state.active_bid_text:
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
 
     with t1:
-        st.markdown("#### 📖 Bid Overview")
         st.write(f"**Link:** {st.session_state.active_bid_link if st.session_state.active_bid_link else 'Not Provided'}")
         st.info(st.session_state.summary_ans)
 
     with t2:
-        st.markdown("#### 🛠️ Equipment List")
         st.success(st.session_state.tech_ans)
 
     with t3:
-        st.markdown("#### 📝 Submission Guide")
         st.warning(st.session_state.submission_ans)
 
     with t4:
-        st.markdown("#### ⚖️ Compliance Checklist")
         st.error(st.session_state.compliance_ans)
 
     with t5:
-        st.markdown("#### 💰 Award Info")
         st.write(st.session_state.award_ans)
