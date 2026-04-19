@@ -1,163 +1,100 @@
 import streamlit as st
 import requests
 import time
+from io import BytesIO
 from pypdf import PdfReader
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
-
-# Initialize session state variables
+# --- 1. SESSION STATE INITIALIZATION ---
+if 'all_bids' not in st.session_state: st.session_state.all_bids = []
+if 'active_bid' not in st.session_state: st.session_state.active_bid = None
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
-if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
-if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
-if 'detected_due_date' not in st.session_state: st.session_state.detected_due_date = "N/A"
 
-keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'status_flag']
-for key in keys:
-    if key not in st.session_state: st.session_state[key] = None
+def reset_search():
+    st.session_state.all_bids = []
+    st.session_state.active_bid = None
 
-# API Key Validation
-try:
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-except:
-    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
-    st.stop()
+def go_back():
+    st.session_state.active_bid = None
 
-API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# --- 2. CORE FUNCTIONS ---
-
-def deep_query(full_text, specific_prompt, max_tokens=None):
-    """High-context AI query using Llama 3.1."""
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [
-            {"role": "system", "content": "You are a concise procurement expert. Provide direct answers without filler."},
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
-        ],
-        "temperature": 0.0 
-    }
-    if max_tokens: payload["max_tokens"] = max_tokens
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        return response.json()['choices'][0]['message']['content']
-    except:
-        return "N/A"
-
-def scrape_stable_bids(url):
-    """Headless Scraper for Streamlit Cloud deployment."""
+# --- 2. IMPROVED SCRAPER (Finds Documents) ---
+def scrape_with_docs(url):
     options = Options()
     options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(options=options)
     
-    blacklist = ["log out", "contact us", "home", "download", "page 1", "records", "reset", "showing 1 to", "powered by"]
-
     try:
-        driver = webdriver.Chrome(options=options)
         driver.get(url)
-        time.sleep(8) 
+        time.sleep(5)
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         driver.quit()
         
-        found_bids = []
+        found = []
         rows = soup.find_all('tr')
         for row in rows:
-            text = row.get_text(separator=' ', strip=True)
-            if any(marker in text.lower() for marker in ["rfb-is-", "rfp-", "solicitation"]):
-                if not any(bad in text.lower() for bad in blacklist):
-                    clean_name = " ".join(text.split())[:150].upper()
-                    if clean_name[:40] not in [b['name'][:40] for b in found_bids]:
-                        found_bids.append({"name": clean_name, "full_text": text, "link": url})
-        return found_bids[:10]
+            text = row.get_text(strip=True)
+            if "RFB" in text or "RFP" in text:
+                # Find the document link inside the row
+                doc_link = row.find('a', href=lambda x: x and ('.pdf' in x or '.doc' in x))
+                full_doc_url = urljoin(url, doc_link['href']) if doc_link else None
+                
+                found.append({
+                    "name": text[:100].upper(),
+                    "content": text,
+                    "doc_url": full_doc_url
+                })
+        return found
     except:
         return []
 
-# --- 3. UI ---
+# --- 3. UI LOGIC ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
+# Sidebar
 with st.sidebar:
-    st.header("Project Performance")
-    st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
-    if st.button("🔄 Start New Search"):
-        st.session_state.active_bid_text = None
-        st.session_state.uploader_key += 1
-        st.session_state.detected_due_date = "N/A"
-        for key in keys: st.session_state[key] = None
-        st.rerun()
-    st.caption("UCR Master of Science - Jeffrey Gaspar")
+    st.metric("Time Saved", f"{st.session_state.total_saved} mins")
+    if st.button("🔍 New Search"): reset_search()
 
-input_mode = st.radio("Data Source:", ["Upload PDF", "Live Portal Link"])
+# VIEW 1: Analysis View (If a bid is selected)
+if st.session_state.active_bid:
+    if st.button("⬅️ Back to Search Result List"): go_back()
+    
+    bid = st.session_state.active_bid
+    st.subheader(f"Analyzing: {bid['name']}")
+    
+    # DOWNLOAD SECTION
+    if bid['doc_url']:
+        try:
+            # We download the file into memory so the user can grab it from YOUR site
+            file_data = requests.get(bid['doc_url']).content
+            st.download_button(
+                label="📥 Download Original Bid Document",
+                data=file_data,
+                file_name="bid_document.pdf",
+                mime="application/pdf"
+            )
+        except:
+            st.warning("Could not auto-fetch the file. Try clicking the source link.")
 
-if st.session_state.active_bid_text is None:
-    if input_mode == "Upload PDF":
-        uploaded_file = st.file_uploader("Upload Bid PDF", type="pdf", key=f"up_{st.session_state.uploader_key}")
-        if uploaded_file:
-            reader = PdfReader(uploaded_file)
-            st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])[:45000]
+    # (Insert your AI Analysis Tabs here as before...)
+
+# VIEW 2: Search Result List (If bids are found but none selected)
+elif st.session_state.all_bids:
+    st.write(f"Found {len(st.session_state.all_bids)} bid opportunities:")
+    for idx, bid in enumerate(st.session_state.all_bids):
+        with st.container(border=True):
+            st.write(f"**{bid['name']}**")
+            if st.button("Analyze & View Details", key=f"analyze_{idx}"):
+                st.session_state.active_bid = bid
+                st.rerun()
+
+# VIEW 3: Initial Search View
+else:
+    url_input = st.text_input("Paste Portal URL:")
+    if st.button("Scrape Bids"):
+        with st.spinner("Finding bids and documents..."):
+            st.session_state.all_bids = scrape_with_docs(url_input)
             st.rerun()
-    else:
-        url_input = st.text_input("Paste Portal URL:")
-        if url_input:
-            with st.spinner("Searching portal..."):
-                bids = scrape_stable_bids(url_input)
-            if bids:
-                for idx, bid in enumerate(bids):
-                    with st.container(border=True):
-                        st.write(f"### 📦 {bid['name']}")
-                        if st.button(f"Analyze Bid", key=f"btn_{idx}"):
-                            st.session_state.active_bid_text = bid['full_text']
-                            st.rerun()
-
-# --- 4. ANALYSIS & DISPLAY ---
-if st.session_state.active_bid_text:
-    if not st.session_state.summary_ans:
-        with st.status("🚀 Running Deep Scan...") as status:
-            doc = st.session_state.active_bid_text
-            
-            # --- IMPROVED DATE EXTRACTION ---
-            st.session_state.detected_due_date = deep_query(doc, "Extract ONLY the bid due date (e.g., April 24, 2026).", max_tokens=15)
-            date_val = st.session_state.detected_due_date
-            
-            is_awarded = deep_query(doc, "Has a vendor already been selected? Answer YES or NO.", max_tokens=5)
-            
-            # Status Logic (Today is April 19, 2026)
-            if "YES" in is_awarded.upper():
-                st.session_state.status_flag = "AWARDED"
-            elif "APRIL" in date_val and any(d in date_val for d in ["24", "25", "26", "27", "28", "29", "30"]):
-                st.session_state.status_flag = "OPEN"
-            else:
-                st.session_state.status_flag = "OPEN" # Safety fallback for current LA County bids
-
-            st.session_state.summary_ans = deep_query(doc, "Summarize goal and scope.")
-            st.session_state.tech_ans = deep_query(doc, "List IT/software/tech requirements.")
-            st.session_state.submission_ans = f"**Close Date Detected: {date_val}**\n\n" + deep_query(doc, "Identify submission steps.")
-            st.session_state.compliance_ans = deep_query(doc, "Identify mandatory insurance and legal rules.")
-            st.session_state.award_ans = deep_query(doc, "Identify awarded vendor or budget.")
-            
-            st.session_state.total_saved += 150
-            st.rerun()
-
-    # --- DYNAMIC STATUS UI ---
-    clean_status = str(st.session_state.status_flag).strip().upper()
-    due_date_display = st.session_state.detected_due_date
-
-    if "OPEN" in clean_status or "ACTIVE" in clean_status:
-        st.success(f"✅ STATUS: OPEN (Due: {due_date_display})")
-    elif "AWARDED" in clean_status:
-        st.info(f"💰 STATUS: AWARDED")
-    else:
-        st.error(f"🚨 STATUS: CLOSED")
-
-    st.divider()
-    t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award"])
-    with t1: st.info(st.session_state.summary_ans)
-    with t2: st.success(st.session_state.tech_ans)
-    with t3: st.warning(st.session_state.submission_ans)
-    with t4: st.error(st.session_state.compliance_ans)
-    with t5: st.write(st.session_state.award_ans)
