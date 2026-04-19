@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 
+# Initialize session states
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
@@ -18,13 +19,19 @@ keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_an
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
 
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+# API Key Validation
+try:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except:
+    st.error("🔑 API Key missing! Please add GROQ_API_KEY to Streamlit Secrets.")
+    st.stop()
+
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt, max_tokens=None):
-    """High-context AI query. restored from original version."""
+    """High-context AI query using Llama 3.1 via Groq."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -35,35 +42,56 @@ def deep_query(full_text, specific_prompt, max_tokens=None):
         "temperature": 0.0 
     }
     if max_tokens: payload["max_tokens"] = max_tokens
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-    return response.json()['choices'][0]['message']['content']
+    
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        return response.json()['choices'][0]['message']['content']
+    except Exception:
+        return "Analysis timeout or error."
 
 def scrape_stable_bids(url):
-    """Restored scraper with Selenium fix for Streamlit Cloud."""
+    """Headless Scraper that filters out navigation junk (Pages, Reset, Login)."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    
+    # Filter out technical "behind the scenes" text
+    blacklist = [
+        "log out", "contact us", "home", "download a list", 
+        "page 1", "items per page", "records", "reset", 
+        "showing 1 to", "powered by", "javascript", "items per page",
+        "next", "previous", "sign in", "cookies"
+    ]
     
     try:
         driver = webdriver.Chrome(options=options)
         driver.get(url)
-        time.sleep(7) 
+        time.sleep(7) # Wait for JS to render the bid list
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         driver.quit()
         
         found_bids = []
-        for row in soup.find_all(['tr', 'div']):
-            text = row.get_text(separator=' ', strip=True)
-            # Standard BidNet keywords
-            if len(text) > 55 and any(k in text.lower() for k in ["software", "hardware", "network", "it ", "technology"]):
-                clean_name = " ".join(text.split())[:115].upper()
-                link_tag = row.find('a', href=True)
-                bid_link = urljoin(url, link_tag['href']) if link_tag else url
-                if clean_name[:60] not in [b['name'][:60] for b in found_bids]:
-                    found_bids.append({"name": clean_name, "full_text": text, "link": bid_link})
+        for link in soup.find_all('a', href=True):
+            text = link.get_text(separator=' ', strip=True)
+            text_lower = text.lower()
+            
+            # Logic: Length must be significant, and must not contain navigation junk
+            if len(text) > 35 and not any(bad in text_lower for bad in blacklist):
+                clean_name = " ".join(text.split()).upper()
+                bid_link = urljoin(url, link['href'])
+                
+                # Deduplicate to keep the list clean
+                if clean_name[:50] not in [b['name'][:50] for b in found_bids]:
+                    found_bids.append({
+                        "name": clean_name, 
+                        "full_text": f"BID OPPORTUNITY: {clean_name}. SOURCE: {url}", 
+                        "link": bid_link
+                    })
         return found_bids[:10]
-    except:
+    except Exception as e:
+        st.sidebar.error(f"Scraper encountered an issue: {e}")
         return []
 
 # --- 3. UI ---
@@ -86,15 +114,16 @@ if st.session_state.active_bid_text is None:
         uploaded_file = st.file_uploader("Upload Bid PDF", type="pdf", key=f"up_{st.session_state.uploader_key}")
         if uploaded_file:
             reader = PdfReader(uploaded_file)
-            full_content = ""
-            for page in reader.pages:
-                full_content += page.extract_text() + "\n"
+            full_content = "\n".join([page.extract_text() for page in reader.pages])
             st.session_state.active_bid_text = full_content[:45000] 
             st.rerun()
+            
     else:
-        url_input = st.text_input("Paste Portal URL:")
+        url_input = st.text_input("Paste Portal URL:", placeholder="https://camisvr.co.la.ca.us/...")
         if url_input:
-            bids = scrape_stable_bids(url_input)
+            with st.spinner("🕵️ Filtering out navigation junk and finding bids..."):
+                bids = scrape_stable_bids(url_input)
+            
             if bids:
                 for idx, bid in enumerate(bids):
                     with st.container(border=True):
@@ -102,28 +131,28 @@ if st.session_state.active_bid_text is None:
                         if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
                             st.session_state.active_bid_text = bid['full_text']
                             st.rerun()
+            else:
+                st.warning("No bids found. The site may be blocking automation or requires a manual PDF upload.")
 
-# --- 4. ANALYSIS ---
+# --- 4. ANALYSIS & DISPLAY ---
 if st.session_state.active_bid_text:
     if not st.session_state.summary_ans:
         with st.status("🚀 Chained Deep-Scan in Progress...", expanded=True) as status:
             doc = st.session_state.active_bid_text
             
-            # Use deep_query for everything to avoid NameErrors
-            st.session_state.status_flag = deep_query(doc, "Identify if this bid is OPEN, ACTIVE, CLOSED, or AWARDED. Answer with ONLY the word.", max_tokens=5)
-            st.session_state.summary_ans = deep_query(doc, "Summarize project goal and scope.")
-            st.session_state.tech_ans = deep_query(doc, "List all IT hardware, software (like Nlyte), and cabling requirements.")
+            # Perform AI queries
+            st.session_state.status_flag = deep_query(doc, "Identify if this bid is OPEN, ACTIVE, CLOSED, or AWARDED. Answer with ONLY the word.", max_tokens=10)
+            st.session_state.summary_ans = deep_query(doc, "Summarize the project goal and scope.")
+            st.session_state.tech_ans = deep_query(doc, "List all IT hardware, software, and cabling requirements.")
             st.session_state.submission_ans = deep_query(doc, "Identify bid due dates and submission steps.")
             st.session_state.compliance_ans = deep_query(doc, "Identify mandatory insurance and legal rules.")
-            
-            # FIXED: Changed query_groq_fast to deep_query
-            st.session_state.award_ans = deep_query(doc, "Identify awarded vendor or estimate budget.") 
+            st.session_state.award_ans = deep_query(doc, "Identify awarded vendor or total commodity lines.")
             
             st.session_state.total_saved += 150 
             status.update(label="Full Audit Complete!", state="complete", expanded=False)
             st.rerun()
 
-    # DISPLAY - This part shows your ACTIVE/CLOSED status badges
+    # Restoration of Status Badges
     clean_status = str(st.session_state.status_flag).strip().upper().replace(".", "")
     if any(word in clean_status for word in ["OPEN", "ACTIVE"]):
         st.success(f"✅ STATUS: {clean_status}")
@@ -134,6 +163,7 @@ if st.session_state.active_bid_text:
 
     st.divider()
 
+    # Tabbed results for clarity
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
     with t1: st.info(st.session_state.summary_ans)
     with t2: st.success(st.session_state.tech_ans)
