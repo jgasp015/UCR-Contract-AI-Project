@@ -7,7 +7,7 @@ from io import BytesIO
 from urllib.parse import urljoin
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="UCR Contract AI", layout="wide")
+st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 
 # Initialize Session States
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
@@ -22,7 +22,7 @@ for key in keys:
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing!")
+    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -43,7 +43,7 @@ def query_groq(prompt, system_role):
         return "⚠️ Connection Error"
 
 # --- 3. UI ---
-st.title("🏛️ Public Sector Contract AI")
+st.title("🏛️ Public Sector Contract Analyzer")
 
 with st.sidebar:
     st.header("Project Performance")
@@ -66,37 +66,55 @@ if not st.session_state.active_bid_text:
             st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:5000]
             st.session_state.active_bid_link = manual_url
             st.rerun()
+    else:
+        # Live Portal mode placeholder logic
+        url_input = st.text_input("Paste Portal URL:")
+        if url_input:
+            st.info("Portal scraping active. Select a bid to analyze.")
+            # (Insert portal scraping logic here if needed)
 
 # --- 4. INSTANT ANALYSIS AREA ---
 if st.session_state.active_bid_text:
     
-    # 1. Automatic Status & Multi-Tab Analysis (Run once without buttons)
+    # Run analysis automatically if not already done
     if not st.session_state.summary_ans:
-        with st.spinner("🤖 AI is analyzing all contract sections... please wait."):
-            # Status Check
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        with st.spinner("Analyzing contract..."):
+            # 1. Status
+            status_text.text("Checking contract status...")
             st.session_state.status_flag = query_groq(f"Is this bid Awarded, Closed, or Active? Answer in 1 word: {st.session_state.active_bid_text}", "Auditor.")
+            progress_bar.progress(20)
             
-            # Overview
-            st.session_state.summary_ans = query_groq(f"Summarize project scope: {st.session_state.active_bid_text}", "Advisor.")
+            # 2. Overview
+            status_text.text("Summarizing project goals...")
+            st.session_state.summary_ans = query_groq(f"Summarize project scope simply: {st.session_state.active_bid_text}", "Advisor.")
+            progress_bar.progress(40)
             
-            # Tech Specs
+            # 3. Tech Specs
+            status_text.text("Extracting technical requirements...")
             st.session_state.tech_ans = query_groq(f"List ONLY IT hardware/software/cabling: {st.session_state.active_bid_text}", "IT Auditor.")
+            progress_bar.progress(60)
             
-            # Submission
-            st.session_state.submission_ans = query_groq(f"Deadlines and how to submit: {st.session_state.active_bid_text}", "Advisor.")
+            # 4. Submission
+            status_text.text("Identifying deadlines...")
+            st.session_state.submission_ans = query_groq(f"Deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor.")
+            progress_bar.progress(80)
             
-            # Compliance
+            # 5. Compliance & Award
+            status_text.text("Finalizing compliance and financial data...")
             st.session_state.compliance_ans = query_groq(f"Mandatory rules and reporting: {st.session_state.active_bid_text}", "Auditor.")
-            
-            # Award Info
             st.session_state.award_ans = query_groq(f"Identify Awarded Vendor and Amount: {st.session_state.active_bid_text}", "Financial Auditor.")
+            progress_bar.progress(100)
             
-            # Update metric (80 mins total for a full auto-analysis)
             st.session_state.total_saved += 80 
+            status_text.empty()
+            progress_bar.empty()
             st.rerun()
 
     # --- DISPLAY RESULTS ---
-    if "Active" not in st.session_state.status_flag:
+    if st.session_state.status_flag and "Active" not in st.session_state.status_flag:
         st.error(f"🚨 STATUS: {st.session_state.status_flag.upper()}")
     else:
         st.success("✅ STATUS: ACTIVE")
