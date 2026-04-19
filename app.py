@@ -9,8 +9,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-# --- 1. SAFE INITIALIZATION (Fixes the AttributeError) ---
-# This block MUST come before any 'if st.session_state' checks
+# --- 1. SAFE INITIALIZATION ---
 if 'all_bids' not in st.session_state: st.session_state.all_bids = []
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 if 'active_bid_name' not in st.session_state: st.session_state.active_bid_name = None
@@ -22,7 +21,6 @@ keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_an
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
 
-# Create a temporary directory for downloads
 DOWNLOAD_DIR = os.path.join(os.getcwd(), "temp_downloads")
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
@@ -59,7 +57,6 @@ def scrape_stable_bids(url):
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    
     try:
         driver = webdriver.Chrome(options=options)
         driver.get(url)
@@ -68,23 +65,18 @@ def scrape_stable_bids(url):
         driver.quit()
         
         found_bids = []
-        rows = soup.find_all('tr')
-        for row in rows:
+        for row in soup.find_all('tr'):
             text = row.get_text(separator=' ', strip=True)
             if any(marker in text.lower() for marker in ["rfb-is-", "rfp-", "solicitation"]):
                 clean_name = " ".join(text.split())[:150].upper()
                 if clean_name[:40] not in [b['name'][:40] for b in found_bids]:
-                    found_bids.append({
-                        "name": clean_name, 
-                        "full_text": text, 
-                        "link": url  # In LA County, the main list URL is the anchor
-                    })
+                    found_bids.append({"name": clean_name, "full_text": text, "link": url})
         return found_bids[:10]
     except:
         return []
 
 def fetch_document_binary(url):
-    """Clicks Download and grabs file from the LA County Portal."""
+    """Robust document fetcher with selector fallbacks."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -95,17 +87,34 @@ def fetch_document_binary(url):
     driver = webdriver.Chrome(options=options)
     try:
         driver.get(url)
-        time.sleep(5)
-        # Try to find the specific blue Download button
-        btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Download')] | //a[contains(@class, 'btn')]")
-        driver.execute_script("arguments[0].click();", btn)
-        time.sleep(8)
-        files = os.listdir(DOWNLOAD_DIR)
-        if files:
-            file_path = os.path.join(DOWNLOAD_DIR, files[0])
-            with open(file_path, "rb") as f: data = f.read()
-            os.remove(file_path)
-            return data, files[0]
+        time.sleep(6)
+        
+        # Try multiple ways to find the download button
+        selectors = [
+            "//button[contains(text(), 'Download')]",
+            "//a[contains(text(), 'Download')]",
+            "//a[contains(@class, 'btn-primary')]",
+            "//button[contains(@class, 'btn')]"
+        ]
+        
+        btn = None
+        for selector in selectors:
+            try:
+                btn = driver.find_element(By.XPATH, selector)
+                if btn: break
+            except: continue
+
+        if btn:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(10)
+            files = os.listdir(DOWNLOAD_DIR)
+            if files:
+                file_path = os.path.join(DOWNLOAD_DIR, files[0])
+                with open(file_path, "rb") as f: data = f.read()
+                os.remove(file_path)
+                return data, files[0]
+        return None, None
+    except:
         return None, None
     finally:
         driver.quit()
@@ -117,11 +126,10 @@ with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     if st.button("🔄 New Search"):
-        # Reset everything
-        for k in ['all_bids', 'active_bid_text', 'active_bid_name', 'active_bid_url', 'detected_due_date'] + keys:
-            if k == 'all_bids': st.session_state[k] = []
-            elif k == 'total_saved': pass
-            else: st.session_state[k] = None
+        st.session_state.all_bids = []
+        st.session_state.active_bid_text = None
+        st.session_state.active_bid_name = None
+        for k in keys: st.session_state[k] = None
         st.rerun()
 
 # --- VIEW 1: ANALYSIS ---
@@ -132,13 +140,16 @@ if st.session_state.active_bid_text:
 
     st.subheader(f"Analyzing: {st.session_state.active_bid_name}")
 
-    if st.button("📥 Pull & Download Original Doc to My Site"):
+    if st.button("🚀 Pull & Download Original Doc to My Site"):
         with st.spinner("Grabbing file from portal..."):
-            b, name = fetch_document_binary(st.session_state.active_bid_url or "https://camisvr.co.la.ca.us/LACoBids/")
-            if b:
-                st.download_button(label=f"Click to Download {name}", data=b, file_name=name)
-            else:
-                st.error("Portal requires manual document download.")
+            try:
+                b, name = fetch_document_binary(st.session_state.active_bid_url or "https://camisvr.co.la.ca.us/LACoBids/")
+                if b:
+                    st.download_button(label=f"Click to Download {name}", data=b, file_name=name)
+                else:
+                    st.warning("Could not locate download button. Portal may be restricted.")
+            except Exception:
+                st.error("Automated pull failed. Please download manually from the source.")
 
     if not st.session_state.summary_ans:
         with st.status("🚀 Analyzing...") as status:
