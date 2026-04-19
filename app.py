@@ -27,7 +27,6 @@ except:
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
-
 @st.cache_data(show_spinner=False)
 def query_groq_fast(prompt, system_role):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -38,14 +37,12 @@ def query_groq_fast(prompt, system_role):
     }
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
-        data = response.json()
-        return data['choices'][0]['message']['content']
+        return response.json()['choices'][0]['message']['content']
     except:
         return "⚠️ Error"
 
 def scrape_multi_it_bids(url):
     it_keywords = ["computer", "software", "network", "telecommunication", "hardware", "radio", "data", "ev ", "cabling", "fiber", "saas", "cloud"]
-    ignore_words = ["page", "showing", "log out", "reset", "next", "contact us"]
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         res = requests.get(url, headers=headers, timeout=15)
@@ -54,12 +51,11 @@ def scrape_multi_it_bids(url):
         found_bids = []
         for row in rows:
             text = row.get_text(separator=' ', strip=True)
-            if any(k in text.lower() for k in it_keywords) and not any(i in text.lower() for i in ignore_words):
-                if len(text) > 45:
-                    link_tag = row.find('a', href=True)
-                    bid_link = urljoin(url, link_tag['href']) if link_tag else url
-                    if text[:60] not in [b['name'][:60] for b in found_bids]:
-                        found_bids.append({"name": text[:120], "full_text": text, "link": bid_link})
+            if any(k in text.lower() for k in it_keywords):
+                link_tag = row.find('a', href=True)
+                bid_link = urljoin(url, link_tag['href']) if link_tag else url
+                if len(text) > 45 and text[:60] not in [b['name'][:60] for b in found_bids]:
+                    found_bids.append({"name": text[:100], "full_text": text, "link": bid_link})
         return found_bids[:10]
     except:
         return []
@@ -70,39 +66,33 @@ st.title("🏛️ Public Sector Contract Analyzer")
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
-    
     if st.button("🔄 Start New Search"):
         st.cache_data.clear()
+        st.session_state.active_bid_text = None
         st.session_state.uploader_key += 1
-        for key in ['active_bid_text'] + keys: 
-            st.session_state[key] = None
+        for key in keys: st.session_state[key] = None
         st.rerun()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
-# RADIO BUTTON IS THE SOURCE OF TRUTH
+# --- THE FIX: Clear Input Branching ---
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
-# --- CLEAN INPUT BRANCHING ---
-if not st.session_state.active_bid_text:
-    
-    if input_mode == "Upload PDF":
-        # Only show Uploader in this branch
-        uploaded_file = st.file_uploader(
-            "Upload PDF", 
-            type="pdf", 
-            key=f"pdf_up_{st.session_state.uploader_key}"
-        )
-        if uploaded_file:
-            reader = PdfReader(uploaded_file)
-            pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
-            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
-            st.rerun()
+# We create an empty container to ensure clean rendering
+input_container = st.empty()
 
-    else:
-        # Only show URL bar in this branch
-        url_input = st.text_input("Paste Portal URL:")
-        if url_input:
-            with st.spinner("Scanning portal..."):
+if st.session_state.active_bid_text is None:
+    with input_container.container():
+        if input_mode == "Upload PDF":
+            # Force a new key every time we reset
+            uploaded_file = st.file_uploader("Upload PDF", type="pdf", key=f"file_up_{st.session_state.uploader_key}")
+            if uploaded_file:
+                reader = PdfReader(uploaded_file)
+                pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
+                st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
+                st.rerun()
+        else:
+            url_input = st.text_input("Paste Portal URL:", key="url_input_bar")
+            if url_input:
                 bids = scrape_multi_it_bids(url_input)
                 if bids:
                     for idx, bid in enumerate(bids):
@@ -112,10 +102,13 @@ if not st.session_state.active_bid_text:
                                 st.session_state.active_bid_text = bid['full_text']
                                 st.rerun()
                 else:
-                    st.warning("No IT bids found on this page.")
+                    st.warning("No IT bids found.")
 
-# --- 4. CLEAN INSTANT ANALYSIS AREA ---
+# --- 4. ANALYSIS ---
 if st.session_state.active_bid_text:
+    # Remove the input container entirely once a bid is active
+    input_container.empty()
+    
     if not st.session_state.summary_ans:
         with st.status("🔍 Analyzing Contract Lifecycle...", expanded=True) as status:
             st.session_state.status_flag = query_groq_fast("Identify status: Active, Closed, or Awarded. 1 word only.", f"Text: {st.session_state.active_bid_text}")
@@ -124,7 +117,6 @@ if st.session_state.active_bid_text:
             st.session_state.submission_ans = query_groq_fast("List deadlines and submission steps.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.compliance_ans = query_groq_fast("List mandatory rules/reporting.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.award_ans = query_groq_fast("Identify winning vendor and amount.", f"Text: {st.session_state.active_bid_text}")
-            
             st.session_state.total_saved += 100 
             status.update(label="Analysis Complete", state="complete", expanded=False)
             st.rerun()
