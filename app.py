@@ -27,7 +27,7 @@ except:
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. STABLE & FAST FUNCTIONS ---
+# --- 2. CORE FUNCTIONS ---
 
 @st.cache_data(show_spinner=False)
 def query_groq_fast(prompt, system_role):
@@ -45,32 +45,48 @@ def query_groq_fast(prompt, system_role):
         return f"⚠️ AI Analysis Error: {str(e)}"
 
 def scrape_stable_bids(url):
-    """Reliable scraper with a 15-second timeout for slower portals."""
-    it_keywords = ["software", "hardware", "network", "cabling", "saas", "cloud", "it ", "technology", "telecom"]
-    junk_words = ["javascript", "detached", "loading", "refresh", "login", "advanced sort", "table"]
+    """Reliable scraper with strict filters for LA County and junk headers."""
+    it_keywords = ["software", "hardware", "network", "cabling", "saas", "cloud", "it ", "technology", "telecom", "project"]
+    
+    # These words trigger the scraper to IGNORE a block of text
+    junk_words = [
+        "javascript", "detached", "loading", "refresh", "login", "advanced sort", 
+        "table ad", "page 1 of", "items per page", "reset showing", "total 262 records",
+        "solicitation number title", "type department", "download a list", "home open",
+        "showing 1 to", "next page", "previous page"
+    ]
+    
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
     
     try:
-        # TIMEOUT ADDITION: Increased to 15s for better portal reach
+        # 15-second timeout for slow gov portals
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         found_bids = []
         
-        # Scan common content containers
-        for row in soup.find_all(['tr', 'div', 'li', 'span']):
+        # Scan table rows and divs for content
+        for row in soup.find_all(['tr', 'div']):
             text = row.get_text(separator=' ', strip=True)
             text_lower = text.lower()
             
-            # Check for Technology Keywords and filter out 'behind the scenes' technical junk
-            if any(k in text_lower for k in it_keywords) and not any(j in text_lower for j in junk_words):
-                if len(text) > 45:
-                    clean_name = text[:110].upper()
+            # FILTERS: 
+            # 1. Must be long enough (prevents menu items)
+            # 2. Must have tech keyword
+            # 3. Must NOT have junk words
+            if len(text) > 55 and any(k in text_lower for k in it_keywords):
+                if not any(j in text_lower for j in junk_words):
+                    
+                    # Clean whitespace for the UI display
+                    clean_name = " ".join(text.split())[:115].upper()
+                    
                     # Link recovery
                     link_tag = row.find('a', href=True)
                     bid_link = urljoin(url, link_tag['href']) if link_tag else url
                     
-                    if clean_name not in [b['name'] for b in found_bids]:
+                    # Duplicate check
+                    if clean_name[:60] not in [b['name'][:60] for b in found_bids]:
                         found_bids.append({"name": clean_name, "full_text": text, "link": bid_link})
+        
         return found_bids[:10]
     except:
         return []
@@ -97,7 +113,6 @@ input_placeholder = st.empty()
 if st.session_state.active_bid_text is None:
     with input_placeholder.container():
         if input_mode == "Upload PDF":
-            # Dynamic key ensures the widget resets correctly on 'New Search'
             uploaded_file = st.file_uploader(
                 "Upload Bid Document (PDF)", 
                 type="pdf", 
@@ -105,7 +120,7 @@ if st.session_state.active_bid_text is None:
             )
             if uploaded_file:
                 reader = PdfReader(uploaded_file)
-                # Read first 3 pages for context (Paid Tier can handle more)
+                # Read first 3 pages
                 text_extract = "".join([p.extract_text() for p in reader.pages[:3]])
                 st.session_state.active_bid_text = text_extract[:7000]
                 st.rerun()
@@ -123,16 +138,14 @@ if st.session_state.active_bid_text is None:
                                     st.session_state.active_bid_text = bid['full_text']
                                     st.rerun()
                     else:
-                        st.warning("No bids found. Note: JavaScript-only portals must be analyzed via 'Upload PDF' mode.")
+                        st.warning("No technology bids found. If the site is blank, it likely requires JavaScript. Use 'Upload PDF' mode.")
 
 # --- 4. LIFECYCLE ANALYSIS ---
 if st.session_state.active_bid_text:
-    # Clear the input area to focus on results
     input_placeholder.empty()
     
     if not st.session_state.summary_ans:
         with st.status("🔍 Performing Full Lifecycle Audit...", expanded=True) as status:
-            # All calls execute back-to-back using Paid Tier speed
             st.session_state.status_flag = query_groq_fast("Identify status: Active, Closed, or Awarded. 1 word only.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.summary_ans = query_groq_fast("Summarize project goal and scope.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.tech_ans = query_groq_fast("List all IT hardware, software, and cabling requirements.", f"Text: {st.session_state.active_bid_text}")
@@ -155,16 +168,10 @@ if st.session_state.active_bid_text:
 
     st.divider()
     
-    # Professional 5-Tab Interface
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
     
-    with t1:
-        st.info(st.session_state.summary_ans)
-    with t2:
-        st.success(st.session_state.tech_ans)
-    with t3:
-        st.warning(st.session_state.submission_ans)
-    with t4:
-        st.error(st.session_state.compliance_ans)
-    with t5:
-        st.write(st.session_state.award_ans)
+    with t1: st.info(st.session_state.summary_ans)
+    with t2: st.success(st.session_state.tech_ans)
+    with t3: st.warning(st.session_state.submission_ans)
+    with t4: st.error(st.session_state.compliance_ans)
+    with t5: st.write(st.session_state.award_ans)
