@@ -1,6 +1,5 @@
 streamlit
-pypdf[crypto]
+pypdf
 requests
 beautifulsoup4
 selenium
-webdriver-manager
