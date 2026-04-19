@@ -4,16 +4,14 @@ import time
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from io import BytesIO
-from urllib.parse import urljoin
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 
-# Persistent Performance Metrics
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 
-# Storage for AI answers
+# Added 'award_ans' back to the keys
 keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'status_flag']
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
@@ -26,9 +24,9 @@ except:
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. CACHED AI FUNCTION (Presentation Stability) ---
+# --- 2. HIGH-SPEED AI FUNCTION (Paid Tier Optimized) ---
 @st.cache_data(show_spinner=False)
-def query_groq_cached(prompt, system_role):
+def query_groq_fast(prompt, system_role):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -36,34 +34,11 @@ def query_groq_cached(prompt, system_role):
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
         data = response.json()
-        if "choices" in data:
-            return data['choices'][0]['message']['content']
-        return f"⚠️ Rate Limit: {data.get('error', {}).get('message', 'Busy')}"
-    except:
-        return "⚠️ Connection Error"
-
-def scrape_multi_it_bids(url):
-    it_keywords = ["computer", "software", "network", "telecommunication", "hardware", "radio", "data", "ev ", "cabling", "fiber", "saas", "cloud"]
-    ignore_words = ["page", "showing", "log out", "reset", "next", "contact us"]
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        rows = soup.find_all(['tr', 'div', 'li'])
-        found_bids = []
-        for row in rows:
-            text = row.get_text(separator=' ', strip=True)
-            if any(k in text.lower() for k in it_keywords) and not any(i in text.lower() for i in ignore_words):
-                if len(text) > 45:
-                    link_tag = row.find('a', href=True)
-                    bid_link = urljoin(url, link_tag['href']) if link_tag else url
-                    if text[:60] not in [b['name'][:60] for b in found_bids]:
-                        found_bids.append({"name": text[:120], "full_text": text, "link": bid_link})
-        return found_bids[:10]
-    except:
-        return []
+        return data['choices'][0]['message']['content']
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
 
 # --- 3. UI ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -79,46 +54,40 @@ with st.sidebar:
 
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
-# --- DATA INPUT SECTION (FIXED) ---
-if input_mode == "Live Portal Link":
-    url_input = st.text_input("Paste Portal URL:")
-    if url_input and not st.session_state.active_bid_text:
-        with st.spinner("Finding tech bids..."):
-            bids = scrape_multi_it_bids(url_input)
-            for idx, bid in enumerate(bids):
-                with st.container(border=True):
-                    st.write(f"### 📦 {bid['name']}")
-                    if st.button(f"Analyze Specific Bid", key=f"btn_{idx}"):
-                        st.session_state.active_bid_text = bid['full_text']
-                        st.rerun()
+if not st.session_state.active_bid_text:
+    if input_mode == "Upload PDF":
+        uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+        if uploaded_file:
+            reader = PdfReader(uploaded_file)
+            # Paid Tier can handle 3 important sections easily
+            pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
+            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
+            st.rerun()
 
-elif input_mode == "Upload PDF":
-    uploaded_file = st.file_uploader("Upload PDF", type="pdf")
-    if uploaded_file and not st.session_state.active_bid_text:
-        reader = PdfReader(uploaded_file)
-        pages = [0, len(reader.pages)-1] if len(reader.pages) > 1 else [0]
-        st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:3000]
-        st.rerun()
-
-# --- 4. ANALYSIS AREA ---
+# --- 4. INSTANT PARALLEL ANALYSIS (5-Tab Logic) ---
 if st.session_state.active_bid_text:
     
     if not st.session_state.summary_ans:
-        with st.status("🚀 Running Stable Analysis...", expanded=True) as status:
-            st.write("Checking Status...")
-            st.session_state.status_flag = query_groq_cached(f"Status in 1 word (Active/Awarded/Closed): {st.session_state.active_bid_text}", "Auditor")
-            time.sleep(3) 
+        with st.status("⚡ Paid Tier: High-Speed Full Lifecycle Analysis", expanded=True) as status:
+            # 1. Status
+            st.session_state.status_flag = query_groq_fast(f"Status in 1 word (Active/Awarded/Closed): {st.session_state.active_bid_text}", "Auditor")
             
-            st.write("Analyzing Overview & Specs...")
-            st.session_state.summary_ans = query_groq_cached(f"Summarize goal: {st.session_state.active_bid_text}", "Advisor")
-            st.session_state.tech_ans = query_groq_cached(f"List IT gear/cabling: {st.session_state.active_bid_text}", "Auditor")
-            time.sleep(3)
+            # 2. Overview
+            st.session_state.summary_ans = query_groq_fast(f"Summarize project scope: {st.session_state.active_bid_text}", "Advisor")
             
-            st.write("Finalizing Compliance & Submission...")
-            st.session_state.submission_ans = query_groq_cached(f"Submission steps: {st.session_state.active_bid_text}", "Advisor")
-            st.session_state.compliance_ans = query_groq_cached(f"Compliance & Award info: {st.session_state.active_bid_text}", "Auditor")
+            # 3. Tech
+            st.session_state.tech_ans = query_groq_fast(f"List ONLY IT hardware/cabling/software: {st.session_state.active_bid_text}", "IT Auditor")
             
-            st.session_state.total_saved += 80
+            # 4. Submission
+            st.session_state.submission_ans = query_groq_fast(f"Identify deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor")
+            
+            # 5. Compliance (Purely Regulatory)
+            st.session_state.compliance_ans = query_groq_fast(f"Identify mandatory compliance, insurance, and reporting rules: {st.session_state.active_bid_text}", "Legal Lead")
+            
+            # 6. Award & Budget (Purely Financial)
+            st.session_state.award_ans = query_groq_fast(f"Extract the Awarded Vendor and total Contract Amount/Budget. If not awarded yet, estimate the budget based on the text: {st.session_state.active_bid_text}", "Financial Auditor")
+            
+            st.session_state.total_saved += 100 # Increased metric for 5-tab analysis
             status.update(label="Complete!", state="complete", expanded=False)
             st.rerun()
 
@@ -128,8 +97,27 @@ if st.session_state.active_bid_text:
     else:
         st.success("✅ STATUS: ACTIVE")
 
-    t1, t2, t3, t4 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance & Award"])
-    with t1: st.info(st.session_state.summary_ans)
-    with t2: st.success(st.session_state.tech_ans)
-    with t3: st.warning(st.session_state.submission_ans)
-    with t4: st.write(st.session_state.compliance_ans)
+    st.divider()
+    
+    # 5 Separate Tabs
+    t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award & Budget"])
+    
+    with t1:
+        st.markdown("#### Executive Summary")
+        st.info(st.session_state.summary_ans)
+    
+    with t2:
+        st.markdown("#### Technical Requirements")
+        st.success(st.session_state.tech_ans)
+    
+    with t3:
+        st.markdown("#### Logistics & Deadlines")
+        st.warning(st.session_state.submission_ans)
+    
+    with t4:
+        st.markdown("#### Mandatory Compliance Rules")
+        st.error(st.session_state.compliance_ans)
+        
+    with t5:
+        st.markdown("#### Financial Details")
+        st.write(st.session_state.award_ans)
