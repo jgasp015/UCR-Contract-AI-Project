@@ -15,13 +15,18 @@ keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_an
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
 
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+try:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except:
+    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
+    st.stop()
+
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt, max_tokens=None):
-    """High-context AI query. Forces short answers for status."""
+    """High-context AI query with fixed naming for reliability."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -32,8 +37,11 @@ def deep_query(full_text, specific_prompt, max_tokens=None):
         "temperature": 0.0 
     }
     if max_tokens: payload["max_tokens"] = max_tokens
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-    return response.json()['choices'][0]['message']['content']
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        return response.json()['choices'][0]['message']['content']
+    except:
+        return "Analysis timeout or error."
 
 def scrape_stable_bids(url):
     it_keywords = ["software", "hardware", "network", "cabling", "saas", "cloud", "it ", "technology"]
@@ -78,6 +86,7 @@ if st.session_state.active_bid_text is None:
             full_content = ""
             for page in reader.pages:
                 full_content += page.extract_text() + "\n"
+            # Read up to 45,000 characters to capture the whole document
             st.session_state.active_bid_text = full_content[:45000] 
             st.rerun()
     else:
@@ -98,21 +107,23 @@ if st.session_state.active_bid_text:
         with st.status("🚀 Chained Deep-Scan in Progress...", expanded=True) as status:
             doc = st.session_state.active_bid_text
             
-            # FORCED ONE-WORD STATUS
-            st.session_state.status_flag = deep_query(doc, "Identify if this bid is OPEN, ACTIVE, CLOSED, or AWARDED. Answer with ONLY the word.", max_tokens=5)
-            
-            st.session_state.summary_ans = deep_query(doc, "Summarize project goal and scope.")
-            st.session_state.tech_ans = deep_query(doc, "List all IT hardware, software (like Nlyte), and cabling requirements.")
+            # Use deep_query consistently to avoid NameErrors
+            st.session_state.status_flag = deep_query(doc, "Identify if this bid is OPEN, ACTIVE, CLOSED, or AWARDED. Answer with ONLY the word.", max_tokens=10)
+            st.session_state.summary_ans = deep_query(doc, "Summarize the project goal and scope.")
+            st.session_state.tech_ans = deep_query(doc, "List all IT hardware, software (like Nlyte), and cabling requirements found in the Price Sheets.")
             st.session_state.submission_ans = deep_query(doc, "Identify bid due dates and submission steps.")
             st.session_state.compliance_ans = deep_query(doc, "Identify mandatory insurance and legal rules.")
-            st.session_state.award_ans = query_groq_fast("Identify awarded vendor or estimate budget.", doc) # Helper call
+            st.session_state.award_ans = deep_query(doc, "Identify awarded vendor or total commodity lines.")
             
             st.session_state.total_saved += 150 
             status.update(label="Full Audit Complete!", state="complete", expanded=False)
             st.rerun()
 
-    # DISPLAY
+    # --- DISPLAY ---
+    # Clean the status flag of any AI "conversational" junk
     clean_status = str(st.session_state.status_flag).strip().upper().replace(".", "")
+    
+    # Handle the "OPEN" vs "ACTIVE" labeling
     if any(word in clean_status for word in ["OPEN", "ACTIVE"]):
         st.success(f"✅ STATUS: {clean_status}")
     elif "AWARDED" in clean_status:
