@@ -26,6 +26,7 @@ except:
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
+
 @st.cache_data(show_spinner=False)
 def query_groq_fast(prompt, system_role):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -38,34 +39,45 @@ def query_groq_fast(prompt, system_role):
         response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
         return response.json()['choices'][0]['message']['content']
     except:
-        return "⚠️ Error"
+        return "⚠️ AI Error"
 
 def scrape_multi_it_bids(url):
-    """Enhanced scraper that filters out JavaScript warnings and system text."""
-    # Only show these
-    it_keywords = ["computer", "software", "network", "telecommunication", "hardware", "cabling", "saas", "cloud", "it ", "technology"]
-    # STRICTLY HIDE THESE
-    system_trash = ["javascript", "browser required", "skip navigation", "login", "enabled", "cookies", "abstracts status"]
+    """Highly filtered scraper to remove 'behind the scenes' technical text."""
+    # MUST contain one of these
+    it_keywords = ["software", "hardware", "network", "cabling", "saas", "cloud", "telecom", "it ", "technology", "computer", "fiber", "protective"]
     
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    # MUST NOT contain any of these (Technical 'Behind the scenes' junk)
+    junk_words = [
+        "detached", "table", "advanced sort", "refresh", "loading", "javascript", 
+        "navigation", "login", "attach", "detach", "more...", "next", "items per page",
+        "specification number", "event program", "abstracts status"
+    ]
+    
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Look for table rows and list items where the actual bids usually live
+        # Focus on rows and divs likely to be actual content
         rows = soup.find_all(['tr', 'div', 'li'])
         found_bids = []
         
         for row in rows:
-            text = row.get_text(separator=' ', strip=True).lower()
+            text = row.get_text(separator=' ', strip=True)
+            text_lower = text.lower()
             
-            # LOGIC: Must have an IT word AND must NOT have 'JavaScript/Login' trash
-            if any(k in text for k in it_keywords) and not any(s in text for s in system_trash):
-                if len(text) > 30:
+            # 1. Check if it has an IT keyword
+            # 2. Check if it's NOT junk
+            # 3. Ensure it's not just a single word
+            if any(k in text_lower for k in it_keywords) and not any(j in text_lower for j in junk_words):
+                if len(text) > 40:
                     link_tag = row.find('a', href=True)
                     bid_link = urljoin(url, link_tag['href']) if link_tag else url
-                    if text[:50] not in [b['name'][:50] for b in found_bids]:
-                        found_bids.append({"name": text[:100].upper(), "full_text": text, "link": bid_link})
+                    
+                    # Prevent duplicates
+                    if text[:50].upper() not in [b['name'][:50] for b in found_bids]:
+                        found_bids.append({"name": text[:120].upper(), "full_text": text, "link": bid_link})
+        
         return found_bids[:10]
     except:
         return []
@@ -97,32 +109,33 @@ if st.session_state.active_bid_text is None:
                 st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
                 st.rerun()
         else:
-            url_input = st.text_input("Paste Portal URL:", placeholder="https://...")
+            url_input = st.text_input("Paste Portal URL:")
             if url_input:
-                bids = scrape_multi_it_bids(url_input)
-                if bids:
-                    for idx, bid in enumerate(bids):
-                        with st.container(border=True):
-                            st.write(f"### 📦 {bid['name']}")
-                            if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
-                                st.session_state.active_bid_text = bid['full_text']
-                                st.rerun()
-                else:
-                    st.warning("⚠️ No technology bids found. The portal might be blocking automated access or requires JavaScript.")
+                with st.spinner("Filtering for real bids..."):
+                    bids = scrape_multi_it_bids(url_input)
+                    if bids:
+                        for idx, bid in enumerate(bids):
+                            with st.container(border=True):
+                                st.write(f"### 📦 {bid['name']}")
+                                if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
+                                    st.session_state.active_bid_text = bid['full_text']
+                                    st.rerun()
+                    else:
+                        st.warning("No matching bids found. Please try a different URL or Upload PDF.")
 
-# --- 4. ANALYSIS & DISPLAY (Same as before) ---
+# --- 4. ANALYSIS ---
 if st.session_state.active_bid_text:
     input_container.empty()
     if not st.session_state.summary_ans:
-        with st.status("🔍 Analyzing Contract Lifecycle...", expanded=True) as status:
-            st.session_state.status_flag = query_groq_fast("Identify status: Active, Closed, or Awarded. 1 word only.", f"Text: {st.session_state.active_bid_text}")
+        with st.status("🔍 Analyzing Bid Details...", expanded=True) as status:
+            st.session_state.status_flag = query_groq_fast("Status: Active, Closed, or Awarded. 1 word.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.summary_ans = query_groq_fast("Summarize project goal.", f"Text: {st.session_state.active_bid_text}")
-            st.session_state.tech_ans = query_groq_fast("List IT gear/software.", f"Text: {st.session_state.active_bid_text}")
-            st.session_state.submission_ans = query_groq_fast("Deadlines and steps.", f"Text: {st.session_state.active_bid_text}")
-            st.session_state.compliance_ans = query_groq_fast("Rules and reporting.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.tech_ans = query_groq_fast("List IT hardware/software/cabling.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.submission_ans = query_groq_fast("Deadlines and submission steps.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.compliance_ans = query_groq_fast("Mandatory rules/reporting.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.award_ans = query_groq_fast("Winner and amount.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.total_saved += 100 
-            status.update(label="Analysis Complete", state="complete", expanded=False)
+            status.update(label="Complete!", state="complete", expanded=False)
             st.rerun()
 
     clean_status = st.session_state.status_flag.strip().replace(".", "").upper()
