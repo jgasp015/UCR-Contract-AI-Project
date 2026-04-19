@@ -20,22 +20,22 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
 
-def deep_query(full_text, specific_prompt):
-    """High-context AI query for deep-scanning documents."""
+def deep_query(full_text, specific_prompt, max_tokens=None):
+    """High-context AI query. Forces short answers for status."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
-            {"role": "system", "content": "You are a Procurement Auditor. Find hidden technical specs, part numbers, and Nlyte modules in price sheets."},
-            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{full_text}"}
+            {"role": "system", "content": "You are a concise procurement expert. Provide direct answers without conversational filler."},
+            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
         ],
         "temperature": 0.0 
     }
+    if max_tokens: payload["max_tokens"] = max_tokens
     response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
     return response.json()['choices'][0]['message']['content']
 
 def scrape_stable_bids(url):
-    """Restored stable scraper with junk filters."""
     it_keywords = ["software", "hardware", "network", "cabling", "saas", "cloud", "it ", "technology"]
     junk_words = ["javascript", "detached", "loading", "page 1 of", "items per page"]
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -68,55 +68,59 @@ with st.sidebar:
         st.rerun()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
-# RESTORED: Both modes now available
 input_mode = st.radio("Data Source:", ["Upload PDF", "Live Portal Link"])
-input_placeholder = st.empty()
 
 if st.session_state.active_bid_text is None:
-    with input_placeholder.container():
-        if input_mode == "Upload PDF":
-            uploaded_file = st.file_uploader("Upload Bid PDF", type="pdf", key=f"up_{st.session_state.uploader_key}")
-            if uploaded_file:
-                with st.spinner("Analyzing all pages for IT specs..."):
-                    reader = PdfReader(uploaded_file)
-                    full_content = ""
-                    for page in reader.pages:
-                        full_content += page.extract_text() + "\n"
-                    st.session_state.active_bid_text = full_content[:40000] # Full context bypass
-                    st.rerun()
-        else:
-            url_input = st.text_input("Paste Portal URL:")
-            if url_input:
-                with st.spinner("Scraping Portal..."):
-                    bids = scrape_stable_bids(url_input)
-                    if bids:
-                        for idx, bid in enumerate(bids):
-                            with st.container(border=True):
-                                st.write(f"### 📦 {bid['name']}")
-                                if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
-                                    st.session_state.active_bid_text = bid['full_text']
-                                    st.rerun()
+    if input_mode == "Upload PDF":
+        uploaded_file = st.file_uploader("Upload Bid PDF", type="pdf", key=f"up_{st.session_state.uploader_key}")
+        if uploaded_file:
+            reader = PdfReader(uploaded_file)
+            full_content = ""
+            for page in reader.pages:
+                full_content += page.extract_text() + "\n"
+            st.session_state.active_bid_text = full_content[:45000] 
+            st.rerun()
+    else:
+        url_input = st.text_input("Paste Portal URL:")
+        if url_input:
+            bids = scrape_stable_bids(url_input)
+            if bids:
+                for idx, bid in enumerate(bids):
+                    with st.container(border=True):
+                        st.write(f"### 📦 {bid['name']}")
+                        if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
+                            st.session_state.active_bid_text = bid['full_text']
+                            st.rerun()
 
 # --- 4. ANALYSIS ---
 if st.session_state.active_bid_text:
-    input_placeholder.empty()
     if not st.session_state.summary_ans:
         with st.status("🚀 Chained Deep-Scan in Progress...", expanded=True) as status:
             doc = st.session_state.active_bid_text
-            st.session_state.status_flag = deep_query(doc, "Status: Active/Closed/Awarded. 1 word.")
+            
+            # FORCED ONE-WORD STATUS
+            st.session_state.status_flag = deep_query(doc, "Identify if this bid is OPEN, ACTIVE, CLOSED, or AWARDED. Answer with ONLY the word.", max_tokens=5)
+            
             st.session_state.summary_ans = deep_query(doc, "Summarize project goal and scope.")
-            st.session_state.tech_ans = deep_query(doc, "List all IT items, software modules (like Nlyte), and part numbers in the Price Sheets.")
-            st.session_state.submission_ans = deep_query(doc, "Identify due dates and submission steps.")
-            st.session_state.compliance_ans = deep_query(doc, "List insurance limits and legal rules.")
-            st.session_state.award_ans = deep_query(doc, "Identify award vendor or estimated budget.")
+            st.session_state.tech_ans = deep_query(doc, "List all IT hardware, software (like Nlyte), and cabling requirements.")
+            st.session_state.submission_ans = deep_query(doc, "Identify bid due dates and submission steps.")
+            st.session_state.compliance_ans = deep_query(doc, "Identify mandatory insurance and legal rules.")
+            st.session_state.award_ans = query_groq_fast("Identify awarded vendor or estimate budget.", doc) # Helper call
+            
             st.session_state.total_saved += 150 
             status.update(label="Full Audit Complete!", state="complete", expanded=False)
             st.rerun()
 
     # DISPLAY
-    clean_status = str(st.session_state.status_flag).upper()
-    if "ACTIVE" in clean_status or "OPEN" in clean_status: st.success(f"✅ STATUS: {clean_status}")
-    else: st.error(f"🚨 STATUS: {clean_status}")
+    clean_status = str(st.session_state.status_flag).strip().upper().replace(".", "")
+    if any(word in clean_status for word in ["OPEN", "ACTIVE"]):
+        st.success(f"✅ STATUS: {clean_status}")
+    elif "AWARDED" in clean_status:
+        st.info(f"💰 STATUS: {clean_status}")
+    else:
+        st.error(f"🚨 STATUS: {clean_status}")
+
+    st.divider()
 
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
     with t1: st.info(st.session_state.summary_ans)
