@@ -9,8 +9,10 @@ from urllib.parse import urljoin
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 
+# Initialize Session States
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
+if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
 keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'status_flag']
 for key in keys:
@@ -52,7 +54,7 @@ def scrape_multi_it_bids(url):
         found_bids = []
         for row in rows:
             text = row.get_text(separator=' ', strip=True)
-            if any(k in text.lower() for k in it_keywords) and not any(i in text.lower() for i in ignore_words):
+            if any(k in text.lower() for k in it_keywords) and not any(i in text_lower for i in ignore_words):
                 if len(text) > 45:
                     link_tag = row.find('a', href=True)
                     bid_link = urljoin(url, link_tag['href']) if link_tag else url
@@ -68,14 +70,19 @@ st.title("🏛️ Public Sector Contract Analyzer")
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
+    
     if st.button("🔄 Start New Search"):
         st.cache_data.clear()
-        for key in ['active_bid_text'] + keys: st.session_state[key] = None
+        # Increment uploader_key to force widget refresh
+        st.session_state.uploader_key += 1
+        for key in ['active_bid_text'] + keys: 
+            st.session_state[key] = None
         st.rerun()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
+# --- DATA INPUT LOGIC ---
 if not st.session_state.active_bid_text:
     if input_mode == "Live Portal Link":
         url_input = st.text_input("Paste Portal URL:")
@@ -91,7 +98,8 @@ if not st.session_state.active_bid_text:
                                 st.rerun()
 
     elif input_mode == "Upload PDF":
-        uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+        # Dynamic key prevents the uploader from disappearing after reset
+        uploaded_file = st.file_uploader("Upload PDF", type="pdf", key=f"pdf_up_{st.session_state.uploader_key}")
         if uploaded_file:
             reader = PdfReader(uploaded_file)
             pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
@@ -100,10 +108,8 @@ if not st.session_state.active_bid_text:
 
 # --- 4. CLEAN INSTANT ANALYSIS AREA ---
 if st.session_state.active_bid_text:
-    
     if not st.session_state.summary_ans:
         with st.status("🔍 Analyzing Contract Lifecycle...", expanded=True) as status:
-            # Combined analysis steps for cleaner UI
             st.session_state.status_flag = query_groq_fast("Identify status: Active, Closed, or Awarded. 1 word only.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.summary_ans = query_groq_fast("Summarize project goal.", f"Text: {st.session_state.active_bid_text}")
             st.session_state.tech_ans = query_groq_fast("List IT hardware/software/cabling.", f"Text: {st.session_state.active_bid_text}")
@@ -115,7 +121,7 @@ if st.session_state.active_bid_text:
             status.update(label="Analysis Complete", state="complete", expanded=False)
             st.rerun()
 
-    # --- RESULTS DISPLAY ---
+    # --- DISPLAY ---
     clean_status = st.session_state.status_flag.strip().replace(".", "").upper()
     if "ACTIVE" in clean_status:
         st.success(f"✅ STATUS: {clean_status}")
