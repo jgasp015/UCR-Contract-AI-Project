@@ -12,7 +12,6 @@ st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 
-# 5-Tab Persistence Keys
 keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'status_flag']
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
@@ -20,7 +19,7 @@ for key in keys:
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing! Check your Streamlit Secrets.")
+    st.error("🔑 API Key missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -77,12 +76,11 @@ with st.sidebar:
 
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
-# --- DATA LOADING (LIVE LINK RESTORED) ---
 if not st.session_state.active_bid_text:
     if input_mode == "Live Portal Link":
         url_input = st.text_input("Paste Portal URL:")
         if url_input:
-            with st.spinner("Scanning portal for Technology Bids..."):
+            with st.spinner("Scanning portal..."):
                 bids = scrape_multi_it_bids(url_input)
                 if bids:
                     for idx, bid in enumerate(bids):
@@ -93,7 +91,7 @@ if not st.session_state.active_bid_text:
                                 st.session_state.active_bid_text = bid['full_text']
                                 st.rerun()
                 else:
-                    st.warning("No IT bids found on this page.")
+                    st.warning("No IT bids found.")
 
     elif input_mode == "Upload PDF":
         uploaded_file = st.file_uploader("Upload PDF", type="pdf")
@@ -103,27 +101,39 @@ if not st.session_state.active_bid_text:
             st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
             st.rerun()
 
-# --- 4. INSTANT 5-TAB ANALYSIS ---
+# --- 4. INSTANT ANALYSIS AREA ---
 if st.session_state.active_bid_text:
     
     if not st.session_state.summary_ans:
-        with st.status("⚡ Paid Tier: High-Speed Full Lifecycle Analysis", expanded=True) as status:
-            st.session_state.status_flag = query_groq_fast(f"Status (Active/Awarded/Closed): {st.session_state.active_bid_text}", "Auditor")
+        with st.status("⚡ Paid Tier: High-Speed Analysis", expanded=True) as status:
+            # STRICT STATUS PROMPT: No more long sentences.
+            status_prompt = (
+                "Analyze the text and determine the bid status. "
+                "Respond ONLY with one of these labels: 'Active', 'Closed/Expired', 'Awarded', or 'Ongoing'. "
+                "Do not include any other text or explanation."
+            )
+            st.session_state.status_flag = query_groq_fast(f"{status_prompt} | Text: {st.session_state.active_bid_text}", "Status Auditor")
+            
+            # Normal Analysis
             st.session_state.summary_ans = query_groq_fast(f"Summarize goal: {st.session_state.active_bid_text}", "Advisor")
             st.session_state.tech_ans = query_groq_fast(f"List ONLY IT hardware/cabling/software: {st.session_state.active_bid_text}", "IT Auditor")
-            st.session_state.submission_ans = query_groq_fast(f"Deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor")
-            st.session_state.compliance_ans = query_groq_fast(f"Identify mandatory rules and reporting: {st.session_state.active_bid_text}", "Legal Lead")
-            st.session_state.award_ans = query_groq_fast(f"Extract Awarded Vendor and Contract Amount: {st.session_state.active_bid_text}", "Financial Auditor")
+            st.session_state.submission_ans = query_groq_fast(f"Deadlines and submission: {st.session_state.active_bid_text}", "Advisor")
+            st.session_state.compliance_ans = query_groq_fast(f"Mandatory rules and reporting: {st.session_state.active_bid_text}", "Legal Lead")
+            st.session_state.award_ans = query_groq_fast(f"Identify Winner and Amount: {st.session_state.active_bid_text}", "Financial Auditor")
             
             st.session_state.total_saved += 100 
             status.update(label="Complete!", state="complete", expanded=False)
             st.rerun()
 
-    # --- DISPLAY ---
-    if st.session_state.status_flag and "Active" not in st.session_state.status_flag:
-        st.error(f"🚨 STATUS: {st.session_state.status_flag.upper()}")
+    # --- DISPLAY (CLEAN LABELS) ---
+    clean_status = st.session_state.status_flag.strip().replace(".", "").upper()
+    
+    if "ACTIVE" in clean_status:
+        st.success(f"✅ STATUS: {clean_status}")
+    elif "AWARDED" in clean_status:
+        st.info(f"💰 STATUS: {clean_status}")
     else:
-        st.success("✅ STATUS: ACTIVE")
+        st.error(f"🚨 STATUS: {clean_status}")
 
     st.divider()
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
