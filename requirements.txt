@@ -1,5 +1,5 @@
 streamlit
-pypdf
 requests
+pypdf
 beautifulsoup4
 selenium
