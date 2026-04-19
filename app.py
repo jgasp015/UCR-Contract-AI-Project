@@ -24,7 +24,7 @@ except:
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. HIGH-SPEED FUNCTIONS ---
+# --- 2. CORE FUNCTIONS ---
 
 @st.cache_data(show_spinner=False)
 def query_groq_fast(prompt, system_role):
@@ -38,8 +38,8 @@ def query_groq_fast(prompt, system_role):
         response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
         data = response.json()
         return data['choices'][0]['message']['content']
-    except Exception as e:
-        return f"⚠️ Error: {str(e)}"
+    except:
+        return "⚠️ Error"
 
 def scrape_multi_it_bids(url):
     it_keywords = ["computer", "software", "network", "telecommunication", "hardware", "radio", "data", "ev ", "cabling", "fiber", "saas", "cloud"]
@@ -86,12 +86,9 @@ if not st.session_state.active_bid_text:
                     for idx, bid in enumerate(bids):
                         with st.container(border=True):
                             st.write(f"### 📦 {bid['name']}")
-                            st.markdown(f"🔗 [Direct Link]({bid['link']})")
                             if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
                                 st.session_state.active_bid_text = bid['full_text']
                                 st.rerun()
-                else:
-                    st.warning("No IT bids found.")
 
     elif input_mode == "Upload PDF":
         uploaded_file = st.file_uploader("Upload PDF", type="pdf")
@@ -101,33 +98,25 @@ if not st.session_state.active_bid_text:
             st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
             st.rerun()
 
-# --- 4. INSTANT ANALYSIS AREA ---
+# --- 4. CLEAN INSTANT ANALYSIS AREA ---
 if st.session_state.active_bid_text:
     
     if not st.session_state.summary_ans:
-        with st.status("⚡ Paid Tier: High-Speed Analysis", expanded=True) as status:
-            # STRICT STATUS PROMPT: No more long sentences.
-            status_prompt = (
-                "Analyze the text and determine the bid status. "
-                "Respond ONLY with one of these labels: 'Active', 'Closed/Expired', 'Awarded', or 'Ongoing'. "
-                "Do not include any other text or explanation."
-            )
-            st.session_state.status_flag = query_groq_fast(f"{status_prompt} | Text: {st.session_state.active_bid_text}", "Status Auditor")
-            
-            # Normal Analysis
-            st.session_state.summary_ans = query_groq_fast(f"Summarize goal: {st.session_state.active_bid_text}", "Advisor")
-            st.session_state.tech_ans = query_groq_fast(f"List ONLY IT hardware/cabling/software: {st.session_state.active_bid_text}", "IT Auditor")
-            st.session_state.submission_ans = query_groq_fast(f"Deadlines and submission: {st.session_state.active_bid_text}", "Advisor")
-            st.session_state.compliance_ans = query_groq_fast(f"Mandatory rules and reporting: {st.session_state.active_bid_text}", "Legal Lead")
-            st.session_state.award_ans = query_groq_fast(f"Identify Winner and Amount: {st.session_state.active_bid_text}", "Financial Auditor")
+        with st.status("🔍 Analyzing Contract Lifecycle...", expanded=True) as status:
+            # Combined analysis steps for cleaner UI
+            st.session_state.status_flag = query_groq_fast("Identify status: Active, Closed, or Awarded. 1 word only.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.summary_ans = query_groq_fast("Summarize project goal.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.tech_ans = query_groq_fast("List IT hardware/software/cabling.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.submission_ans = query_groq_fast("List deadlines and submission steps.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.compliance_ans = query_groq_fast("List mandatory rules/reporting.", f"Text: {st.session_state.active_bid_text}")
+            st.session_state.award_ans = query_groq_fast("Identify winning vendor and amount.", f"Text: {st.session_state.active_bid_text}")
             
             st.session_state.total_saved += 100 
-            status.update(label="Complete!", state="complete", expanded=False)
+            status.update(label="Analysis Complete", state="complete", expanded=False)
             st.rerun()
 
-    # --- DISPLAY (CLEAN LABELS) ---
+    # --- RESULTS DISPLAY ---
     clean_status = st.session_state.status_flag.strip().replace(".", "").upper()
-    
     if "ACTIVE" in clean_status:
         st.success(f"✅ STATUS: {clean_status}")
     elif "AWARDED" in clean_status:
@@ -137,7 +126,6 @@ if st.session_state.active_bid_text:
 
     st.divider()
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
-    
     with t1: st.info(st.session_state.summary_ans)
     with t2: st.success(st.session_state.tech_ans)
     with t3: st.warning(st.session_state.submission_ans)
