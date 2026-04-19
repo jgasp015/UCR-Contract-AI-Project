@@ -57,6 +57,10 @@ def scrape_stable_bids(url):
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    
+    # REFINED BLACKLIST: Removed "Continuous" and Table Headers
+    blacklist = ["log out", "contact us", "home", "download", "page 1", "records", "reset", "showing 1 to", "continuous", "solicitation number title"]
+
     try:
         driver = webdriver.Chrome(options=options)
         driver.get(url)
@@ -67,16 +71,20 @@ def scrape_stable_bids(url):
         found_bids = []
         for row in soup.find_all('tr'):
             text = row.get_text(separator=' ', strip=True)
-            if any(marker in text.lower() for marker in ["rfb-is-", "rfp-", "solicitation"]):
-                clean_name = " ".join(text.split())[:150].upper()
-                if clean_name[:40] not in [b['name'][:40] for b in found_bids]:
-                    found_bids.append({"name": clean_name, "full_text": text, "link": url})
+            text_lower = text.lower()
+            
+            # Must contain bid marker AND NOT be a header/junk
+            if any(marker in text_lower for marker in ["rfb-is-", "rfp-", "solicitation"]):
+                if not any(bad in text_lower for bad in blacklist):
+                    clean_name = " ".join(text.split())[:150].upper()
+                    if clean_name[:40] not in [b['name'][:40] for b in found_bids]:
+                        found_bids.append({"name": clean_name, "full_text": text, "link": url})
         return found_bids[:10]
     except:
         return []
 
 def fetch_document_binary(url):
-    """Robust document fetcher with selector fallbacks."""
+    """Robust document fetcher."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -89,12 +97,10 @@ def fetch_document_binary(url):
         driver.get(url)
         time.sleep(6)
         
-        # Try multiple ways to find the download button
         selectors = [
             "//button[contains(text(), 'Download')]",
             "//a[contains(text(), 'Download')]",
-            "//a[contains(@class, 'btn-primary')]",
-            "//button[contains(@class, 'btn')]"
+            "//a[contains(@class, 'btn-primary')]"
         ]
         
         btn = None
@@ -129,30 +135,35 @@ with st.sidebar:
         st.session_state.all_bids = []
         st.session_state.active_bid_text = None
         st.session_state.active_bid_name = None
+        st.session_state.detected_due_date = "N/A"
         for k in keys: st.session_state[k] = None
         st.rerun()
 
 # --- VIEW 1: ANALYSIS ---
 if st.session_state.active_bid_text:
-    if st.button("⬅️ Back to List"):
+    if st.button("⬅️ Back to Search Results"):
         st.session_state.active_bid_text = None
         st.rerun()
 
-    st.subheader(f"Analyzing: {st.session_state.active_bid_name}")
+    st.subheader(f"Analyzing Bid Opportunity")
+    st.caption(st.session_state.active_bid_name)
 
-    if st.button("🚀 Pull & Download Original Doc to My Site"):
-        with st.spinner("Grabbing file from portal..."):
-            try:
+    # --- ENHANCED DOWNLOAD LOGIC ---
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("🚀 Pull Doc to Analyzer"):
+            with st.spinner("Accessing portal..."):
                 b, name = fetch_document_binary(st.session_state.active_bid_url or "https://camisvr.co.la.ca.us/LACoBids/")
                 if b:
-                    st.download_button(label=f"Click to Download {name}", data=b, file_name=name)
+                    st.download_button(label=f"📥 Download {name}", data=b, file_name=name)
                 else:
-                    st.warning("Could not locate download button. Portal may be restricted.")
-            except Exception:
-                st.error("Automated pull failed. Please download manually from the source.")
+                    st.warning("Portal restricted. Use link below.")
+    with col2:
+        if st.session_state.active_bid_url:
+            st.link_button("🔗 Open Original Portal Page", st.session_state.active_bid_url)
 
     if not st.session_state.summary_ans:
-        with st.status("🚀 Analyzing...") as status:
+        with st.status("🚀 Performing Deep Scan...") as status:
             doc = st.session_state.active_bid_text
             st.session_state.detected_due_date = deep_query(doc, "Due Date? (e.g. April 24, 2026)", max_tokens=15)
             st.session_state.status_flag = "OPEN"
@@ -178,7 +189,7 @@ elif st.session_state.all_bids:
     for idx, bid in enumerate(st.session_state.all_bids):
         with st.container(border=True):
             st.write(f"### 📦 {bid['name']}")
-            if st.button("Analyze Bid", key=f"btn_{idx}"):
+            if st.button("Analyze Bid Details", key=f"btn_{idx}"):
                 st.session_state.active_bid_text = bid['full_text']
                 st.session_state.active_bid_name = bid['name']
                 st.session_state.active_bid_url = bid['link']
@@ -196,7 +207,7 @@ else:
             st.rerun()
     else:
         url = st.text_input("Portal URL:")
-        if st.button("Scrape"):
+        if st.button("Scrape Bids"):
             with st.spinner("Searching..."):
                 st.session_state.all_bids = scrape_stable_bids(url)
                 st.rerun()
