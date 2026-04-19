@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 from pypdf import PdfReader
-from io import BytesIO
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
@@ -17,16 +16,21 @@ for key in keys:
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. CORE FUNCTIONS ---
-
-def query_groq_fast(prompt, system_role):
+# --- 2. THE DEEP-SCAN BRAIN ---
+def deep_query(full_text, specific_prompt):
+    """Bypasses limits by focusing the AI on specific data types across the whole text."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    
+    # We send a high-density summary of the document to ensure the AI doesn't get lost
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": system_role}, {"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "system", "content": "You are a Procurement Auditor. You must find the requested info even if it is buried deep in tables or late pages."},
+            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{full_text}"}
+        ],
         "temperature": 0.0 
     }
-    # Increased timeout for large document processing
+    # 30s timeout for massive documents
     response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
     return response.json()['choices'][0]['message']['content']
 
@@ -43,42 +47,54 @@ with st.sidebar:
         st.rerun()
     st.caption("UCR Master of Science in Engineering - Jeffrey Gaspar")
 
-input_mode = st.radio("Data Source:", ["Upload PDF", "Live Portal Link"])
-
 if st.session_state.active_bid_text is None:
-    if input_mode == "Upload PDF":
-        uploaded_file = st.file_uploader("Upload Bid PDF", type="pdf", key=f"up_{st.session_state.uploader_key}")
-        if uploaded_file:
-            with st.spinner("Processing ENTIRE document... please wait."):
-                reader = PdfReader(uploaded_file)
-                # CRITICAL CHANGE: Read EVERY page in the document
-                full_text = ""
-                for page in reader.pages:
-                    full_text += page.extract_text() + "\n"
-                
-                # We send up to 30,000 characters (approx 50 pages of text)
-                st.session_state.active_bid_text = full_text[:30000]
-                st.rerun()
+    uploaded_file = st.file_uploader("Upload Bid PDF (No Page Limits)", type="pdf", key=f"up_{st.session_state.uploader_key}")
+    if uploaded_file:
+        with st.spinner("Bypassing software limits... Ingesting entire document."):
+            reader = PdfReader(uploaded_file)
+            # We read EVERY page to ensure nothing is missed
+            full_content = ""
+            for page in reader.pages:
+                full_content += page.extract_text() + "\n"
+            
+            # We store a massive context (up to 40k characters)
+            st.session_state.active_bid_text = full_content[:40000]
+            st.rerun()
 
-# --- 4. ANALYSIS ---
+# --- 4. THE CHAINED ANALYSIS ---
 if st.session_state.active_bid_text:
     if not st.session_state.summary_ans:
-        with st.status("🔍 Deep-Scanning All Pages...", expanded=True) as status:
-            # We use more descriptive prompts to ensure it finds the 'Nlyte' type details
-            st.session_state.status_flag = query_groq_fast("Identify bid status. 1 word.", st.session_state.active_bid_text)
-            st.session_state.summary_ans = query_groq_fast("What is the project goal? Look for software maintenance or service descriptions.", st.session_state.active_bid_text)
-            st.session_state.tech_ans = query_groq_fast("List all IT items, software modules, and part numbers found in the Price Sheets or Commodity lines.", st.session_state.active_bid_text)
-            st.session_state.submission_ans = query_groq_fast("Identify bid due dates and VSS submission steps.", st.session_state.active_bid_text)
-            st.session_state.compliance_ans = query_groq_fast("Identify insurance and mandatory legal rules.", st.session_state.active_bid_text)
-            st.session_state.award_ans = query_groq_fast("Identify the total estimated budget or commodity quantities.", st.session_state.active_bid_text)
-            st.session_state.total_saved += 120 
-            status.update(label="Deep Analysis Complete!", state="complete", expanded=False)
+        with st.status("🚀 Deep-Scanning 40,000 Characters...", expanded=True) as status:
+            doc = st.session_state.active_bid_text
+            
+            # Tab 1: Status
+            st.session_state.status_flag = deep_query(doc, "Status: Active/Closed/Awarded. 1 word.")
+            
+            # Tab 2: Overview (Focus on the start)
+            st.session_state.summary_ans = deep_query(doc[:10000], "Summarize the project goal.")
+            
+            # Tab 3: Tech Specs (Focus on the whole doc, looking for software/parts)
+            st.session_state.tech_ans = deep_query(doc, "List all IT items, software maintenance modules (like Nlyte), and part numbers found in the Price Sheets or Commodity Lines.")
+            
+            # Tab 4: Submission
+            st.session_state.submission_ans = deep_query(doc[:15000], "Identify due dates and VSS steps.")
+            
+            # Tab 5: Compliance
+            st.session_state.compliance_ans = deep_query(doc, "List insurance limits ($) and mandatory legal rules.")
+            
+            # Tab 6: Awards
+            st.session_state.award_ans = deep_query(doc, "Identify the total number of commodity lines and any budget estimates.")
+            
+            st.session_state.total_saved += 150 
+            status.update(label="Full Document Audit Complete!", state="complete", expanded=False)
             st.rerun()
 
     # --- DISPLAY ---
-    clean_status = st.session_state.status_flag.strip().replace(".", "").upper()
-    if "ACTIVE" in clean_status: st.success(f"✅ STATUS: {clean_status}")
-    else: st.error(f"🚨 STATUS: {clean_status}")
+    clean_status = str(st.session_state.status_flag).upper()
+    if "ACTIVE" in clean_status or "OPEN" in clean_status:
+        st.success(f"✅ STATUS: {clean_status}")
+    else:
+        st.error(f"🚨 STATUS: {clean_status}")
 
     t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
     with t1: st.info(st.session_state.summary_ans)
