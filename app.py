@@ -4,17 +4,15 @@ import time
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from io import BytesIO
-from urllib.parse import urljoin
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="UCR Contract Analyzer", layout="wide")
 
-# Initialize Session States
+# Persistent Performance Metrics
 if 'total_saved' not in st.session_state: st.session_state.total_saved = 0
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
-if 'active_bid_link' not in st.session_state: st.session_state.active_bid_link = None
 
-# Persistent AI Responses
+# Storage for AI answers
 keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'status_flag']
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
@@ -22,13 +20,15 @@ for key in keys:
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
+    st.error("🔑 API Key missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. CORE FUNCTIONS ---
-def query_groq(prompt, system_role):
+# --- 2. CACHED AI FUNCTION (Saves Tokens) ---
+@st.cache_data(show_spinner=False)
+def query_groq_cached(prompt, system_role):
+    """Caches results so you don't waste tokens re-analyzing the same text."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -36,13 +36,11 @@ def query_groq(prompt, system_role):
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=25)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
         data = response.json()
         if "choices" in data:
             return data['choices'][0]['message']['content']
-        else:
-            # Captures the 'Rate Limit' message directly from Groq
-            return f"⚠️ {data.get('error', {}).get('message', 'AI Busy')}"
+        return f"⚠️ Rate Limit: {data.get('error', {}).get('message', 'Busy')}"
     except:
         return "⚠️ Connection Error"
 
@@ -53,8 +51,8 @@ with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     if st.button("🔄 Start New Search"):
-        for key in ['active_bid_text', 'active_bid_link'] + keys:
-            st.session_state[key] = None
+        st.cache_data.clear() # Clears cache for new file
+        for key in ['active_bid_text'] + keys: st.session_state[key] = None
         st.rerun()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
@@ -63,79 +61,45 @@ input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 if not st.session_state.active_bid_text:
     if input_mode == "Upload PDF":
         uploaded_file = st.file_uploader("Upload PDF", type="pdf")
-        manual_url = st.text_input("Paste Source Link (Optional):")
         if uploaded_file:
             reader = PdfReader(uploaded_file)
-            pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
-            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:4000]
-            st.session_state.active_bid_link = manual_url
+            # Presentation Strategy: Only read the most important pages (Start & End)
+            pages = [0, len(reader.pages)-1] if len(reader.pages) > 1 else [0]
+            # STRICT LIMIT: 3000 chars to stay safe on Free Tier
+            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:3000]
             st.rerun()
 
-# --- 4. INSTANT ANALYSIS AREA (With Stability Throttling) ---
+# --- 4. OPTIMIZED ANALYSIS AREA ---
 if st.session_state.active_bid_text:
     
     if not st.session_state.summary_ans:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        with st.spinner("🤖 Analyzing contract lifecycle..."):
-            # 1. Status
-            status_text.text("Verifying contract status...")
-            st.session_state.status_flag = query_groq(f"Is this bid Awarded, Closed, or Active? Answer in 1 word: {st.session_state.active_bid_text}", "Auditor.")
-            time.sleep(2) # Stability Pause
-            progress_bar.progress(20)
+        with st.status("🚀 Running Presentation-Mode Analysis...", expanded=True) as status:
+            st.write("Verifying Status...")
+            st.session_state.status_flag = query_groq_cached(f"Status in 1 word (Active/Awarded/Closed): {st.session_state.active_bid_text}", "Auditor")
+            time.sleep(3) # Safe delay for Free Tier
             
-            # 2. Overview
-            status_text.text("Generating executive overview...")
-            st.session_state.summary_ans = query_groq(f"Summarize project scope: {st.session_state.active_bid_text}", "Advisor.")
-            time.sleep(2) # Stability Pause
-            progress_bar.progress(40)
+            st.write("Generating Overview & Tech Specs...")
+            st.session_state.summary_ans = query_groq_cached(f"Summarize goal: {st.session_state.active_bid_text}", "Advisor")
+            st.session_state.tech_ans = query_groq_cached(f"List IT gear/cabling: {st.session_state.active_bid_text}", "Auditor")
+            time.sleep(3)
             
-            # 3. Tech Specs
-            status_text.text("Scanning for IT infrastructure...")
-            st.session_state.tech_ans = query_groq(f"List ONLY IT hardware/cabling/software: {st.session_state.active_bid_text}", "IT Auditor.")
-            time.sleep(2) # Stability Pause
-            progress_bar.progress(60)
+            st.write("Checking Compliance & Awards...")
+            st.session_state.submission_ans = query_groq_cached(f"Submission steps: {st.session_state.active_bid_text}", "Advisor")
+            st.session_state.compliance_ans = query_groq_cached(f"Compliance & Award info: {st.session_state.active_bid_text}", "Auditor")
             
-            # 4. Submission
-            status_text.text("Extracting bid deadlines...")
-            st.session_state.submission_ans = query_groq(f"Identify deadlines and submission steps: {st.session_state.active_bid_text}", "Advisor.")
-            time.sleep(2) # Stability Pause
-            progress_bar.progress(80)
-            
-            # 5. Compliance & Award
-            status_text.text("Checking compliance and award history...")
-            st.session_state.compliance_ans = query_groq(f"Identify mandatory compliance and reporting: {st.session_state.active_bid_text}", "Auditor.")
-            st.session_state.award_ans = query_groq(f"Identify Awarded Vendor and Amount: {st.session_state.active_bid_text}", "Financial Auditor.")
-            progress_bar.progress(100)
-            
-            st.session_state.total_saved += 80 
-            status_text.empty()
-            progress_bar.empty()
+            st.session_state.total_saved += 80
+            status.update(label="Analysis Complete!", state="complete", expanded=False)
             st.rerun()
 
-    # --- RESULTS DISPLAY ---
+    # --- DISPLAY ---
     if st.session_state.status_flag and "Active" not in st.session_state.status_flag:
         st.error(f"🚨 STATUS: {st.session_state.status_flag.upper()}")
     else:
         st.success("✅ STATUS: ACTIVE")
 
-    st.divider()
-    
-    t1, t2, t3, t4, t5 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance", "💰 Award Details"])
+    t1, t2, t3, t4 = st.tabs(["📖 Overview", "🛠️ Tech Specs", "📝 Submission", "⚖️ Compliance & Award"])
 
-    with t1:
-        st.write(f"**Link:** {st.session_state.active_bid_link if st.session_state.active_bid_link else 'Not Provided'}")
-        st.info(st.session_state.summary_ans)
-
-    with t2:
-        st.success(st.session_state.tech_ans)
-
-    with t3:
-        st.warning(st.session_state.submission_ans)
-
-    with t4:
-        st.error(st.session_state.compliance_ans)
-
-    with t5:
-        st.write(st.session_state.award_ans)
+    with t1: st.info(st.session_state.summary_ans)
+    with t2: st.success(st.session_state.tech_ans)
+    with t3: st.warning(st.session_state.submission_ans)
+    with t4: st.write(st.session_state.compliance_ans)
