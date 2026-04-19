@@ -54,7 +54,7 @@ def scrape_multi_it_bids(url):
         found_bids = []
         for row in rows:
             text = row.get_text(separator=' ', strip=True)
-            if any(k in text.lower() for k in it_keywords) and not any(i in text_lower for i in ignore_words):
+            if any(k in text.lower() for k in it_keywords) and not any(i in text.lower() for i in ignore_words):
                 if len(text) > 45:
                     link_tag = row.find('a', href=True)
                     bid_link = urljoin(url, link_tag['href']) if link_tag else url
@@ -73,18 +73,33 @@ with st.sidebar:
     
     if st.button("🔄 Start New Search"):
         st.cache_data.clear()
-        # Increment uploader_key to force widget refresh
         st.session_state.uploader_key += 1
         for key in ['active_bid_text'] + keys: 
             st.session_state[key] = None
         st.rerun()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
+# RADIO BUTTON IS THE SOURCE OF TRUTH
 input_mode = st.radio("Data Source:", ["Live Portal Link", "Upload PDF"])
 
-# --- DATA INPUT LOGIC ---
+# --- CLEAN INPUT BRANCHING ---
 if not st.session_state.active_bid_text:
-    if input_mode == "Live Portal Link":
+    
+    if input_mode == "Upload PDF":
+        # Only show Uploader in this branch
+        uploaded_file = st.file_uploader(
+            "Upload PDF", 
+            type="pdf", 
+            key=f"pdf_up_{st.session_state.uploader_key}"
+        )
+        if uploaded_file:
+            reader = PdfReader(uploaded_file)
+            pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
+            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
+            st.rerun()
+
+    else:
+        # Only show URL bar in this branch
         url_input = st.text_input("Paste Portal URL:")
         if url_input:
             with st.spinner("Scanning portal..."):
@@ -96,15 +111,8 @@ if not st.session_state.active_bid_text:
                             if st.button(f"Analyze This Bid", key=f"btn_{idx}"):
                                 st.session_state.active_bid_text = bid['full_text']
                                 st.rerun()
-
-    elif input_mode == "Upload PDF":
-        # Dynamic key prevents the uploader from disappearing after reset
-        uploaded_file = st.file_uploader("Upload PDF", type="pdf", key=f"pdf_up_{st.session_state.uploader_key}")
-        if uploaded_file:
-            reader = PdfReader(uploaded_file)
-            pages = [0, 1, len(reader.pages)-1] if len(reader.pages) > 2 else range(len(reader.pages))
-            st.session_state.active_bid_text = "".join([reader.pages[i].extract_text() for i in pages])[:6000]
-            st.rerun()
+                else:
+                    st.warning("No IT bids found on this page.")
 
 # --- 4. CLEAN INSTANT ANALYSIS AREA ---
 if st.session_state.active_bid_text:
