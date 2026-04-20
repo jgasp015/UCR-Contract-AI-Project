@@ -35,20 +35,22 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
-    """AI Engine configured for Public Clarity and Professional Accuracy."""
+    """AI Engine configured as a Public Information Officer for high-quality transparency."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system", 
-                "content": """You are a Community Liaison. Your job is to tell regular people what their local government is doing.
+                "content": """You are a Public Information Officer for local government. 
+                Your mission is to provide clear, factual transparency regarding how public funds are used.
                 
-                COMMUNICATION GUIDELINES:
-                1. IDENTIFY THE AGENCY: Always state the specific city, county, or state agency involved (e.g., 'Los Angeles County'). Do not use generic terms like 'the government.'
-                2. PROFESSIONAL CLARITY: Use clear, professional English. Avoid complex legal jargon but also avoid slang.
-                3. DIRECTNESS: Use 'failure to meet standards' or 'falling short of requirements' instead of informal terms.
-                4. READABILITY: Use short, punchy sentences. Explain everything as if talking to a well-informed neighbor."""
+                TONE AND STYLE:
+                1. PROFESSIONALISM: Do not use informal greetings like 'Hello neighbors.' Start directly with the facts.
+                2. SPECIFICITY: Always identify the specific agency by name (e.g., 'Los Angeles County').
+                3. ACCESSIBILITY: Use plain English. Replace complex terms with simple alternatives (e.g., use 'purchase' instead of 'procurement').
+                4. NO SLANG: Avoid informal language like 'mess up.' Use 'failure to meet standards' or 'shortfall.'
+                5. STRUCTURE: Use clear sentences. Focus on the 'what,' 'why,' and 'how much.'"""
             },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
         ],
@@ -57,7 +59,7 @@ def deep_query(full_text, specific_prompt):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return response.json()['choices'][0]['message']['content']
-    except: return "I am currently unable to analyze this document."
+    except: return "The analysis system is currently offline."
 
 def scrape_stable_bids(url):
     options = Options()
@@ -115,37 +117,38 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Checking Local Service Rules..."):
+            with st.status("📊 Analyzing Service Standards..."):
                 prompt = """
-                Factually explain the service rules and vendor accountability. 
+                Provide a factual summary of service standards and vendor accountability. 
                 Identify the specific city, county, or state agency involved.
                 
-                1. THE PROMISE: How often does the local agency say the service must work?
-                2. FIXING ISSUES: How fast must the company fix problems (give the actual times)?
-                3. THE PENALTY: What are the financial consequences for the company if they fail to meet standards?
-                4. FAIR EXCEPTIONS: When is it acceptable for the company to take longer to fix things (Stop Clock conditions)?
+                1. RELIABILITY (Availability): Explain the required percentage of time the service must be operational.
+                2. RESTORATION (Fixing Issues): Detail the time limits for fixing problems, including system-wide versus single-site failures.
+                3. INSTALLATION (Provisioning): Explain the deadlines for setting up new services and the penalties for delays.
+                4. FINANCIAL CONSEQUENCES: Explain the specific credits or refunds the agency receives if standards are not met.
+                5. EXCEPTIONS: Summarize the fair reasons why a vendor might not be penalized (Stop Clock conditions).
                 """
                 st.session_state.report_ans = deep_query(doc, prompt)
                 st.session_state.total_saved += 60
                 st.rerun()
         
-        st.info("### 📊 Local Government Rules & Accountability Dashboard")
+        st.info("### 📊 Public Accountability & Performance Dashboard")
         st.markdown(st.session_state.report_ans)
 
     else:
         if not st.session_state.summary_ans:
             with st.status("🚀 Scanning Project Details..."):
-                st.session_state.detected_due_date = deep_query(doc, "Give only the deadline date.")
-                st.session_state.summary_ans = deep_query(doc, "Which local agency is buying this? Explain the main goal and why in simple English.")
-                st.session_state.tech_ans = deep_query(doc, "What equipment, gear, or software are they getting?")
-                st.session_state.submission_ans = deep_query(doc, "What are the exact steps for a company to try and get this job?")
-                st.session_state.compliance_ans = deep_query(doc, "Summarize the legal and insurance rules.")
+                st.session_state.detected_due_date = deep_query(doc, "Extract only the deadline date.")
+                st.session_state.summary_ans = deep_query(doc, "Which specific local agency is this? Explain the project's purpose in simple, professional English.")
+                st.session_state.tech_ans = deep_query(doc, "Summarize the gear, equipment, or software being purchased.")
+                st.session_state.submission_ans = deep_query(doc, "What are the exact steps for a business to apply for this work?")
+                st.session_state.compliance_ans = deep_query(doc, "Summarize the legal and insurance requirements.")
                 st.session_state.award_ans = deep_query(doc, "How will the local agency select a winner? Is a budget listed?")
                 st.session_state.total_saved += 120
                 st.rerun()
 
         st.success(f"✅ Open for Bids (Deadline: {st.session_state.detected_due_date})")
-        tabs = st.tabs(["📖 The Plan", "🛠️ The Gear", "📝 How to Sign Up", "⚖️ The Rules", "💰 Picking a Winner"])
+        tabs = st.tabs(["📖 Project Plan", "🛠️ Technology", "📝 Application Process", "⚖️ Legal Rules", "💰 Winner Selection"])
         tabs[0].info(st.session_state.summary_ans)
         tabs[1].success(st.session_state.tech_ans)
         tabs[2].warning(st.session_state.submission_ans)
@@ -170,7 +173,7 @@ elif st.session_state.all_bids:
 
 # --- VIEW 3: INITIAL SEARCH & MULTI-MODE UPLOAD ---
 else:
-    t1, t2, t3 = st.tabs(["📄 New Project Search", "📊 Check Accountability Rules", "🔗 Search Online"])
+    t1, t2, t3 = st.tabs(["📄 New Project Search", "📊 Performance Standards", "🔗 Search Online"])
     
     with t1:
         st.write("Understand what new projects your local agency is planning.")
@@ -182,7 +185,7 @@ else:
             st.rerun()
 
     with t2:
-        st.write("See how companies are held accountable for service failures.")
+        st.write("See how companies are held accountable for service standards.")
         up_rep = st.file_uploader("Upload a Contract or SOW PDF", type="pdf", key="up_rep")
         if up_rep:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up_rep).pages])
