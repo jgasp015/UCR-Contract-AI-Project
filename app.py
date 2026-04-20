@@ -33,21 +33,16 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
-    """Strictly bulleted fragments. No full sentences or intros."""
+    """Strictly factual fragments. No intros. No labels."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system", 
-                "content": """You are a Government Data Extractor. 
-                STRICT RULES: 
-                - FRAGMENTS ONLY: No full sentences. No 'The project is...'.
-                - BULLETS ONLY: Use (-).
-                - NO FILLER: No greetings, intros, or descriptions.
-                - CONCISE: Max 10 words per bullet."""
+                "content": "You are a Government Data Extractor. RULES: 1. NO INTROS. 2. NO LABELS (e.g., don't say 'Project Title:'). 3. Bullets only. 4. Max 3 words for names/agencies."
             },
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:10000]}"}
         ],
         "temperature": 0.0 
     }
@@ -70,7 +65,7 @@ def scrape_agency_bids(url):
         for row in soup.find_all('tr'):
             text = row.get_text(separator=' ', strip=True)
             if any(m in text.lower() for m in ["rfb", "rfp", "bid", "solicitation"]):
-                found.append({"name": text[:100].upper(), "full_text": text})
+                found.append({"name": text[:80].upper(), "full_text": text})
         return found[:10]
     except: return []
 
@@ -89,13 +84,12 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
-    # SILENT EXTRACTION - Nothing from this block is printed to screen
+    # SILENT EXTRACTION (No UI Output)
     if not st.session_state.agency_name:
-        with st.status("🔍 Extracting..."):
-            # We force the AI to give us 1-3 word answers to prevent paragraphs
-            st.session_state.agency_name = deep_query(doc, "Agency name? (e.g. Los Angeles County). 3 words max.")
-            st.session_state.project_title = deep_query(doc, "Project title? 5 words max.")
-            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY). If missing, N/A.")
+        with st.status("Gathering Data..."):
+            st.session_state.agency_name = deep_query(doc, "Agency name? (e.g. Los Angeles County).")
+            st.session_state.project_title = deep_query(doc, "Project title?")
+            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY).")
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -106,25 +100,25 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- THE FIXED HEADER (Zero Gaps) ---
+    # --- CLEAN HEADER: NO EXTRANEOUS TEXT ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
         st.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
     
-    st.markdown(f"### {st.session_state.project_title}")
-    st.markdown(f"**Agency:** {st.session_state.agency_name}")
+    st.subheader(f"{st.session_state.project_title}")
+    st.write(f"**Agency:** {st.session_state.agency_name}")
     st.divider()
 
-    # --- TABBED DATA ---
+    # --- TABS: EVERYTHING ELSE LIVES HERE ---
     if not st.session_state.summary_ans:
-        with st.status("🚀 Processing..."):
-            st.session_state.bid_details = deep_query(doc, "List ONLY: Solicitation #, Buyer, Email, Phone.")
-            st.session_state.summary_ans = deep_query(doc, "List 5 unique fragments of project goals.")
-            st.session_state.tech_ans = deep_query(doc, "List specific software/hardware. If none, say General IT.")
-            st.session_state.submission_ans = deep_query(doc, "List fragment steps to apply.")
-            st.session_state.compliance_ans = deep_query(doc, "List insurance/legal fragments.")
-            st.session_state.award_ans = deep_query(doc, "Winner selection criteria.")
+        with st.status("🚀 Processing Details..."):
+            st.session_state.bid_details = deep_query(doc, "List Solicitation #, Buyer, Email, Phone.")
+            st.session_state.summary_ans = deep_query(doc, "Bulleted project goals.")
+            st.session_state.tech_ans = deep_query(doc, "Bulleted software/hardware specs.")
+            st.session_state.submission_ans = deep_query(doc, "Bulleted steps to apply.")
+            st.session_state.compliance_ans = deep_query(doc, "Bulleted insurance/legal rules.")
+            st.session_state.award_ans = deep_query(doc, "Winner selection facts.")
             st.rerun()
 
     t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
@@ -136,6 +130,7 @@ if st.session_state.active_bid_text:
     t_award.write(st.session_state.award_ans)
 
 elif st.session_state.all_bids:
+    st.write("### Opportunities")
     for b in st.session_state.all_bids:
         if st.button(b['name']):
             st.session_state.active_bid_text = b['full_text']
