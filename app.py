@@ -5,7 +5,7 @@ import os
 from pypdf import PdfReader
 from datetime import datetime
 
-# --- 1. SESSION STATE ---
+# --- 1. SESSION STATE INITIALIZATION ---
 def init_state():
     keys = {
         'all_bids': [], 'active_bid_text': None, 'active_bid_name': None,
@@ -23,46 +23,77 @@ init_state()
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 GROQ_API_KEY missing!")
+    st.error("🔑 GROQ_API_KEY missing in Streamlit Secrets!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. CORE FUNCTIONS ---
+# --- 2. THE IMPROVED COMBINED ENGINE ---
 
 def deep_query(full_text, specific_prompt, persona="General", is_header=False):
-    """Unified AI Engine with Persona Switching."""
+    """
+    Analyzes the START and END of the document to find the meat.
+    Switches personas based on analysis_mode.
+    """
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    if persona == "Reporting":
-        system_content = "You are a senior Government Procurement and Reporting Analyst. You specialize in Technical Qualifiers, SLA triggers, and SOW compliance. Provide audit-ready data in simple vertical bullet points."
-    else:
-        system_content = "You are a Government Data Extractor. Today is April 20, 2026. RULES: No greetings. No intros. Bullet points only. Max 8 words per line."
+    # Focus on crucial pages (first ~8k chars and last ~8k chars)
+    condensed_text = full_text[:8000] + "\n[...]\n" + full_text[-8000:]
     
+    if persona == "Reporting":
+        system_content = """You are a Public Records Assistant specializing in service standards.
+        RULES:
+        1. FIND THE TRIGGERS: Look for SLA targets, 'Catastrophic Outage' definitions, and 'Stop Clock' rules.
+        2. NO JARGON: Use very simple words for a regular citizen.
+        3. VERTICAL: Use bullet points (-) on new lines. No paragraphs."""
+    else:
+        system_content = """You are a Public Records Assistant explaining projects to a neighbor.
+        RULES:
+        1. MOM-TEST: Use 5-word lines. Simple words only.
+        2. NO LEGAL JUNK: Skip indemnity/lobbying rules.
+        3. FIND THE MEAT: Look at the Price Sheet or Commodity Description at the end.
+        4. START IMMEDIATELY: No intros like 'Here is the info'."""
+
     if is_header:
-        system_content = "Respond with ONLY the name requested. Zero extra words."
+        system_content = "Return ONLY the name requested. Zero extra words. No labels."
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{condensed_text}"}
         ],
         "temperature": 0.0 
     }
+    
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
+        
         if is_header:
-            return res.split('\n')[0].replace("Agency:", "").replace("Project:", "").strip()
-        return res
-    except: return "N/A"
+            # Clean up hallucinated labels
+            for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]:
+                res = res.replace(skip, "")
+            return res.split('\n')[0].strip()
+        
+        # Scrub out AI chitchat and ghost numbers
+        lines = res.split('\n')
+        clean_lines = []
+        for line in lines:
+            l = line.strip()
+            if not l or any(x in l.lower() for x in ["here is", "the following", "text:"]): continue
+            if l[0].isdigit() and (l.endswith(".") or len(l) < 4): continue
+            if not l.startswith("-"): l = f"- {l}"
+            clean_lines.append(l)
+            
+        return "\n\n".join(clean_lines)
+    except: return "Information not found."
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
 with st.sidebar:
-    st.metric("Time Saved", f"{st.session_state.total_saved}m")
+    st.metric("Est. Time Saved", f"{st.session_state.total_saved}m")
     if st.button("🏠 Home / New Search"):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
@@ -76,10 +107,10 @@ if st.session_state.active_bid_text:
 
     # --- SILENT HEADER EXTRACTION ---
     if not st.session_state.agency_name:
-        with st.status("Analyzing Document Context..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
-            st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
-            raw_date = deep_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
+        with st.status("Gathering Document Context..."):
+            st.session_state.agency_name = deep_query(doc, "Which city or county is this?", is_header=True)
+            st.session_state.project_title = deep_query(doc, "What is the short project name?", is_header=True)
+            raw_date = deep_query(doc, "Deadline date (MM/DD/YYYY)?", is_header=True)
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -89,7 +120,7 @@ if st.session_state.active_bid_text:
             except: st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- TOP HEADER ---
+    # --- NO-GAP TOP HEADER ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
@@ -101,35 +132,32 @@ if st.session_state.active_bid_text:
 
     # --- WORKFLOW SWITCHER ---
     
-    # WORKFLOW A: REPORTING MODE (Original Logic Restored)
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Extracting Technical Qualifiers & SLA Triggers..."):
+            with st.status("📊 Checking Service Standards..."):
                 prompt = """
-                Extract SLA Technical Qualifiers from this SOW:
-                1. Triggers for Availability vs. Unavailable Time.
-                2. Excessive Outage duration thresholds.
-                3. Catastrophic Outage (CAT 2 or CAT 3) definitions.
-                4. Valid 'Stop Clock' conditions.
-                Use simple words for a regular citizen. Vertical bullet points only.
+                Extract these 4 rules from the SOW/Contract:
+                1. How is 'uptime' or 'availability' measured?
+                2. What happens if the service is broken for too long?
+                3. What counts as a 'catastrophic' or 'major' problem?
+                4. What are the rules for pausing the service clock (Stop Clock)?
                 """
                 st.session_state.report_ans = deep_query(doc, prompt, persona="Reporting")
                 st.session_state.total_saved += 60
                 st.rerun()
         
-        st.info("### 📊 Senior Analyst: Reporting & Compliance Snapshot")
+        st.info("### 📊 Contract Rules & Standards")
         st.markdown(st.session_state.report_ans)
 
-    # WORKFLOW B: STANDARD BID MODE (Mom-friendly Logic)
     else:
         if not st.session_state.summary_ans:
-            with st.status("Simplifying for citizens..."):
-                st.session_state.bid_details = deep_query(doc, "ID number, Buyer name, and Email.")
-                st.session_state.summary_ans = deep_query(doc, "What are the 5 main things they want to do? 1 line each.")
-                st.session_state.tech_ans = deep_query(doc, "Computers or software needed? 1 line each.")
+            with st.status("Simplifying Project Details..."):
+                st.session_state.bid_details = deep_query(doc, "Bid ID? Person in charge? Email?")
+                st.session_state.summary_ans = deep_query(doc, "Look at the PRICE SHEET/COMMODITY section. What are the 4 main goals?")
+                st.session_state.tech_ans = deep_query(doc, "What computers or software are needed?")
                 st.session_state.submission_ans = deep_query(doc, "Simple steps to sign up.")
-                st.session_state.compliance_ans = deep_query(doc, "Main 3 rules to follow (Simple words).")
-                st.session_state.award_ans = deep_query(doc, "How they pick the winner?")
+                st.session_state.compliance_ans = deep_query(doc, "Main 3 rules? (e.g. No paper, Insurance needed).")
+                st.session_state.award_ans = deep_query(doc, "How do they choose the winner?")
                 st.session_state.total_saved += 120
                 st.rerun()
 
@@ -143,10 +171,10 @@ if st.session_state.active_bid_text:
 
 # --- HOME VIEW ---
 else:
-    t1, t2, t3 = st.tabs(["📄 Search Projects", "📊 Reporting", "🔗 Agency URL"])
+    t1, t2, t3 = st.tabs(["📄 New Bid Search", "📊 Contract Rules", "🔗 Agency URL"])
     
     with t1:
-        st.write("Analyze new bid opportunities.")
+        st.write("Understand new project opportunities.")
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="up1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
@@ -154,14 +182,14 @@ else:
             st.rerun()
             
     with t2:
-        st.write("Extract SLA and reporting triggers from existing contracts/SOWs.")
-        up_c = st.file_uploader("Upload SOW PDF", type="pdf", key="up2")
+        st.write("Understand the rules and triggers of an existing contract.")
+        up_c = st.file_uploader("Upload Contract or SOW PDF", type="pdf", key="up2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
             
     with t3:
-        url_in = st.text_input("Agency Portal URL:")
+        url_in = st.text_input("Enter Government Portal URL:")
         if st.button("Scan Portal"):
-            st.info("Portal scanning requested...")
+            st.info("Scanner requires local driver setup.")
