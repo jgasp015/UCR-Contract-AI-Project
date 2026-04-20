@@ -30,20 +30,18 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt, is_header=False):
-    """FORCES VERTICAL LISTS AND SIMPLE ENGLISH."""
+    """FORCES VERTICAL LISTS BY BREAKING THE TEXT MANUALLY."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # The "Mom Test" System Prompt
-    system_content = """You are a helpful assistant explaining things to a regular citizen. 
+    system_content = """Explain this like you are talking to a neighbor. 
     RULES:
-    1. VERTICAL LISTS: Put every single point on a NEW LINE. Use a dash (-).
-    2. SIMPLE WORDS: No legal words. Use words a 5th grader knows.
-    3. NO PARAGRAPHS: Never group sentences together.
-    4. SHORT: Max 12 words per line.
-    5. NO LABELS: Do not repeat the question."""
+    1. List things one by one.
+    2. Use very short lines (max 8 words).
+    3. No complex words. 
+    4. No paragraphs."""
     
     if is_header:
-        system_content = "Respond with ONLY the name requested. No extra words."
+        system_content = "Give me ONLY the name. No other words."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -56,11 +54,17 @@ def deep_query(full_text, specific_prompt, is_header=False):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
+        
         if is_header:
-            for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]:
-                res = res.replace(skip, "")
-            return res.split('\n')[0]
-        return res
+            return res.split('\n')[0].replace("Agency:", "").replace("Project:", "").strip()
+        
+        # --- THE CLEANUP FIX ---
+        # If the AI gives us a paragraph with dots or bullets, we force a new line
+        clean_res = res.replace(". ", ".\n\n- ").replace("• ", "\n- ").replace(" - ", "\n- ")
+        if not clean_res.startswith("- "):
+            clean_res = "- " + clean_res
+        return clean_res
+
     except: return "N/A"
 
 # --- 3. UI LAYOUT ---
@@ -74,10 +78,10 @@ if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
     if not st.session_state.agency_name:
-        with st.status("Cleaning up document..."):
+        with st.status("Gathering info..."):
             st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
             st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
-            raw_date = deep_query(doc, "Deadline date MM/DD/YYYY?", is_header=True)
+            raw_date = deep_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -88,7 +92,7 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- HEADER ---
+    # --- HEADER (NO GAPS) ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
@@ -98,20 +102,19 @@ if st.session_state.active_bid_text:
     st.write(f"**{st.session_state.agency_name}**")
     st.divider()
 
-    # --- TABS (FORCED VERTICAL SCANNABLE LISTS) ---
+    # --- TABS (FORCED CLEAN LISTS) ---
     if not st.session_state.summary_ans:
-        with st.status("Translating for citizens..."):
-            st.session_state.bid_details = deep_query(doc, "Give me the ID number and the person to call (with email) on separate lines.")
-            st.session_state.summary_ans = deep_query(doc, "In simple words, what are the 5 goals? Use a separate line for each.")
-            st.session_state.tech_ans = deep_query(doc, "What computers or software do they need? List them line by line.")
-            st.session_state.submission_ans = deep_query(doc, "How do I sign up? Give me 3-5 simple steps on separate lines.")
-            st.session_state.compliance_ans = deep_query(doc, "What are the 3 biggest rules to follow? Use very simple words.")
-            st.session_state.award_ans = deep_query(doc, "How do they choose the winner? 1 simple line per reason.")
+        with st.status("Making it easy to read..."):
+            st.session_state.bid_details = deep_query(doc, "Solicitation number? Person to contact? Email?")
+            st.session_state.summary_ans = deep_query(doc, "What are the 5 main goals? Short lines.")
+            st.session_state.tech_ans = deep_query(doc, "What software or gear is needed?")
+            st.session_state.submission_ans = deep_query(doc, "Simple steps to sign up.")
+            st.session_state.compliance_ans = deep_query(doc, "Main 3 rules to follow. Use easy words.")
+            st.session_state.award_ans = deep_query(doc, "How do they pick the winner?")
             st.rerun()
 
     t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
     
-    # Displaying with Markdown to ensure vertical spacing
     t_det.markdown(st.session_state.bid_details)
     t_plan.info(st.session_state.summary_ans)
     t_tech.success(st.session_state.tech_ans)
