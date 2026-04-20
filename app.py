@@ -35,11 +35,12 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
+    """AI Engine configured for high-precision contract and SLA analysis."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
-            {"role": "system", "content": "You are an expert CALNET contract analyst. Provide concise, direct data."},
+            {"role": "system", "content": "You are a senior Government Procurement and Reporting Analyst. You specialize in Technical Qualifiers, SLA triggers, and SOW compliance. Provide audit-ready data."},
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
         ],
         "temperature": 0.0 
@@ -47,9 +48,64 @@ def deep_query(full_text, specific_prompt):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return response.json()['choices'][0]['message']['content']
-    except: return "Analysis unavailable."
+    except: return "Analysis currently unavailable."
 
-# --- [Insert your existing Scraper and Fetch binary functions here unchanged] ---
+def scrape_stable_bids(url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    blacklist = ["log out", "contact us", "home", "download", "page 1", "records", "reset", "showing 1 to", "continuous", "solicitation number title"]
+
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.get(url)
+        time.sleep(8) 
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
+        
+        found_bids = []
+        rows = soup.find_all('tr')
+        for row in rows:
+            text = row.get_text(separator=' ', strip=True)
+            if any(marker in text.lower() for marker in ["rfb-is-", "rfp-", "solicitation"]):
+                if not any(bad in text.lower() for bad in blacklist):
+                    clean_name = " ".join(text.split())[:150].upper()
+                    if clean_name[:40] not in [b['name'][:40] for b in found_bids]:
+                        found_bids.append({"name": clean_name, "full_text": text, "link": url})
+        return found_bids[:10]
+    except: return []
+
+def fetch_document_binary(url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    prefs = {"download.default_directory": DOWNLOAD_DIR}
+    options.add_experimental_option("prefs", prefs)
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(url)
+        time.sleep(6)
+        selectors = ["//button[contains(text(), 'Download')]", "//a[contains(text(), 'Download')]", "//a[contains(@class, 'btn-primary')]"]
+        btn = None
+        for s in selectors:
+            try:
+                btn = driver.find_element(By.XPATH, s)
+                if btn: break
+            except: continue
+        if btn:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(10)
+            files = os.listdir(DOWNLOAD_DIR)
+            if files:
+                file_path = os.path.join(DOWNLOAD_DIR, files[0])
+                with open(file_path, "rb") as f: data = f.read()
+                os.remove(file_path)
+                return data, files[0]
+        return None, None
+    except: return None, None
+    finally: driver.quit()
 
 # --- 3. UI LOGIC ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -72,27 +128,43 @@ if st.session_state.active_bid_text:
     st.subheader(f"Analyzing: {st.session_state.active_bid_name}")
     doc = st.session_state.active_bid_text
 
-    # --- MODE 1: REPORTING PROCESS ONLY ---
+    # --- MODE 1: REPORTING & COMPLIANCE MODE ---
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Extracting SLA Metrics..."):
-                prompt = "As a Senior Reporting Analyst, extract Availability (%), Restoral times for CAT 2/3, Provisioning Obj 1/2, and all associated Credits/Penalties. Present in a markdown table."
+            with st.status("📊 Extracting Technical Qualifiers & SLA Triggers..."):
+                prompt = """
+                As a Senior Reporting Analyst, extract the SLA Technical Qualifiers from this SOW or Contract.
+                
+                1. ANALYST GUIDE: Define the exact triggers for:
+                   - Availability vs. Unavailable Time [cite: 1075, 1077]
+                   - Excessive Outage (what duration triggers the penalty?) [cite: 1156, 1161]
+                   - Catastrophic Outage (what defines a CAT 2 or CAT 3 event?) [cite: 1102, 1126]
+                   - Single-site Restoral vs. Time to Repair [cite: 1148]
+                
+                2. SLA TABLE: Create a markdown table with:
+                   - Category (Metric Name) [cite: 1080, 1113, 1139, 1148]
+                   - Objective Commitment (The threshold, e.g., 99.9% or 15 mins) [cite: 1087, 1116, 1142]
+                   - Credits/Penalties (What is owed if missed?) [cite: 1094, 1119, 1145, 1154]
+                
+                3. STOP CLOCK: List the valid conditions allowed to pause the SLA clock. [cite: 1042, 1050, 1054, 1059]
+                """
                 st.session_state.report_ans = deep_query(doc, prompt)
                 st.session_state.total_saved += 60
                 st.rerun()
-        st.markdown("### 📊 Monthly Reporting Snapshot")
-        st.info(st.session_state.report_ans)
+        
+        st.info("### 📊 Senior Analyst: Reporting & Compliance Snapshot")
+        st.markdown(st.session_state.report_ans)
 
-    # --- MODE 2: BID DOCUMENTS (STANDARD) ---
+    # --- MODE 2: BID DOCUMENTS (STANDARD COMPETITIVE ANALYSIS) ---
     else:
         if not st.session_state.summary_ans:
-            with st.status("🚀 Scanning Bid Details..."):
-                st.session_state.detected_due_date = deep_query(doc, "Extract only the due date.")
-                st.session_state.summary_ans = deep_query(doc, "Summarize goal and scope.")
-                st.session_state.tech_ans = deep_query(doc, "List IT requirements.")
-                st.session_state.submission_ans = deep_query(doc, "List submission steps.")
-                st.session_state.compliance_ans = deep_query(doc, "Insurance/Legal rules.")
-                st.session_state.award_ans = deep_query(doc, "Award/Budget info.")
+            with st.status("🚀 Scanning Competitive Bid Details..."):
+                st.session_state.detected_due_date = deep_query(doc, "Today is April 20, 2026. Extract only the bid due date.")
+                st.session_state.summary_ans = deep_query(doc, "Summarize the project goal and technical scope.")
+                st.session_state.tech_ans = deep_query(doc, "List IT requirements, software, and hardware.")
+                st.session_state.submission_ans = deep_query(doc, "List submission steps and mandatory documents.")
+                st.session_state.compliance_ans = deep_query(doc, "Identify insurance and legal requirements.")
+                st.session_state.award_ans = deep_query(doc, "Identify award criteria or budget information.")
                 st.session_state.total_saved += 120
                 st.rerun()
 
@@ -115,12 +187,12 @@ elif st.session_state.all_bids:
                 st.session_state.analysis_mode = "Standard"
                 st.rerun()
 
-# --- VIEW 3: INITIAL SEARCH & MULTI-UPLOAD ---
+# --- VIEW 3: INITIAL SEARCH & MULTI-MODE UPLOAD ---
 else:
-    t1, t2, t3 = st.tabs(["📄 Upload Bid Doc", "📊 Upload Reporting Doc", "🔗 Live Portal Link"])
+    t1, t2, t3 = st.tabs(["📄 Upload Bid Doc", "📊 Upload SOW/Reporting Doc", "🔗 Live Portal Link"])
     
     with t1:
-        st.write("Analyze competitive bid details (Overview, Tech, Submission).")
+        st.write("Extract competitive intelligence for new bid opportunities.")
         up_bid = st.file_uploader("Upload Bid PDF", type="pdf", key="up_bid")
         if up_bid:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up_bid).pages])
@@ -129,8 +201,8 @@ else:
             st.rerun()
 
     with t2:
-        st.write("Extract SLA, Availability, and Penalty data for monthly reporting.")
-        up_rep = st.file_uploader("Upload SLA/Reporting PDF", type="pdf", key="up_rep")
+        st.write("Extract technical qualifiers and SLA triggers for monthly reporting.")
+        up_rep = st.file_uploader("Upload SOW or Reporting Doc", type="pdf", key="up_rep")
         if up_rep:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up_rep).pages])
             st.session_state.active_bid_name = up_rep.name
@@ -138,8 +210,7 @@ else:
             st.rerun()
 
     with t3:
-        url = st.text_input("Portal URL:")
-        if st.button("Scrape Bids"):
-            # Scraped bids default to Standard mode when clicked
+        url = st.text_input("Paste Portal URL:")
+        if st.button("Scrape & Cherry-Pick Bids"):
             st.session_state.all_bids = scrape_stable_bids(url)
             st.rerun()
