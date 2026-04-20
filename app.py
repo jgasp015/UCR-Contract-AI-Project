@@ -40,7 +40,7 @@ def deep_query(full_text, specific_prompt):
         "messages": [
             {
                 "role": "system", 
-                "content": "You are a Government Data Extractor. RULES: 1. NO INTROS. 2. NO LABELS (e.g., don't say 'Project Title:'). 3. Bullets only. 4. Max 3 words for names/agencies."
+                "content": "You are a Government Data Extractor. RULES: 1. NO INTROS. 2. NO LABELS. 3. Bullets only for tabs. 4. Single words for names."
             },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:10000]}"}
         ],
@@ -84,12 +84,13 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
-    # SILENT EXTRACTION (No UI Output)
+    # SILENT EXTRACTION
     if not st.session_state.agency_name:
         with st.status("Gathering Data..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name? (e.g. Los Angeles County).")
-            st.session_state.project_title = deep_query(doc, "Project title?")
-            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY).")
+            # Clean strings to remove ANY bullets or extra lines the AI might include
+            st.session_state.agency_name = deep_query(doc, "Agency name?").split('\n')[0].replace('- ', '')
+            st.session_state.project_title = deep_query(doc, "Project title?").split('\n')[0].replace('- ', '')
+            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY)").split('\n')[0].replace('- ', '')
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -100,22 +101,22 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- CLEAN HEADER: NO EXTRANEOUS TEXT ---
+    # --- CLEAN HEADER (Zero Extra Content) ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
         st.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
     
-    st.subheader(f"{st.session_state.project_title}")
+    st.subheader(st.session_state.project_title)
     st.write(f"**Agency:** {st.session_state.agency_name}")
     st.divider()
 
-    # --- TABS: EVERYTHING ELSE LIVES HERE ---
+    # --- TABS ---
     if not st.session_state.summary_ans:
         with st.status("🚀 Processing Details..."):
             st.session_state.bid_details = deep_query(doc, "List Solicitation #, Buyer, Email, Phone.")
             st.session_state.summary_ans = deep_query(doc, "Bulleted project goals.")
-            st.session_state.tech_ans = deep_query(doc, "Bulleted software/hardware specs.")
+            st.session_state.tech_ans = deep_query(doc, "Bulleted tech specs.")
             st.session_state.submission_ans = deep_query(doc, "Bulleted steps to apply.")
             st.session_state.compliance_ans = deep_query(doc, "Bulleted insurance/legal rules.")
             st.session_state.award_ans = deep_query(doc, "Winner selection facts.")
@@ -130,7 +131,6 @@ if st.session_state.active_bid_text:
     t_award.write(st.session_state.award_ans)
 
 elif st.session_state.all_bids:
-    st.write("### Opportunities")
     for b in st.session_state.all_bids:
         if st.button(b['name']):
             st.session_state.active_bid_text = b['full_text']
