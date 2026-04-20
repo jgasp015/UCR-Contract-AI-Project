@@ -4,6 +4,9 @@ import time
 import os
 from pypdf import PdfReader
 from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
 
 # --- 1. SESSION STATE ---
 def init_state():
@@ -22,60 +25,71 @@ init_state()
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing in Secrets!")
+    st.error("🔑 API Key missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- 2. CORE FUNCTIONS ---
 
-def deep_query(full_text, specific_prompt, max_chars=12000):
-    """Factual extraction with strict anti-repetition rules."""
-    if not full_text: return "No data."
-    
+def deep_query(full_text, specific_prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system", 
-                "content": """You are a Government Data Extractor. Today is April 20, 2026.
-                STRICT RULES: 
-                1. NO REPETITION: Do not repeat the same point twice. 
-                2. NO FILLER: No intros, greetings, or conclusions. 
-                3. BULLETS ONLY: Use Markdown bullet points (-). 
-                4. MAX 5-7 UNIQUE POINTS: Only extract the most important unique information."""
+                "content": "You are a Government Data Extractor. Today is April 20, 2026. RULES: No greetings. No intros. Bullet points only. No repetition. Be concise."
             },
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:max_chars]}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
         ],
         "temperature": 0.0 
     }
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return response.json()['choices'][0]['message']['content'].strip()
-    except: return "Extraction failed."
+    except: return "N/A"
+
+def scrape_agency_bids(url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.get(url)
+        time.sleep(5)
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
+        found = []
+        for row in soup.find_all('tr'):
+            text = row.get_text(separator=' ', strip=True)
+            if any(m in text.lower() for m in ["rfb", "rfp", "bid", "solicitation"]):
+                found.append({"name": text[:100].upper(), "full_text": text})
+        return found[:10]
+    except: return []
 
 # --- 3. UI ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
 with st.sidebar:
-    if st.button("🏠 Start Over / Home"):
+    if st.button("🏠 Home"):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
 
 if st.session_state.active_bid_text:
+    # 1. Back Button
     if st.button("⬅️ Back"):
         st.session_state.active_bid_text = None
         st.rerun()
 
     doc = st.session_state.active_bid_text
 
-    # SILENT HEADER SCAN
+    # 2. DATA SCAN (Silent)
     if not st.session_state.agency_name:
-        with st.status("🔍 Scanning Header..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name? (e.g. Los Angeles County). ONLY name.")
+        with st.status("🔍 Scanning..."):
+            st.session_state.agency_name = deep_query(doc, "Agency name? ONLY name.")
             st.session_state.project_title = deep_query(doc, "Short project title? ONLY name.")
-            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY). ONLY date.")
+            raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY).")
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -86,34 +100,36 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # DISPLAY HEADER
+    # 3. NO-GAP HEADER (Status > Project > Agency)
+    # Using a container to force layout proximity
+    header = st.container()
     if st.session_state.status_flag == "OPEN":
-        st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
+        header.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
-        st.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
+        header.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
     
-    st.markdown(f"### {st.session_state.agency_name}")
-    st.markdown(f"**{st.session_state.project_title}**")
-    st.divider()
+    header.markdown(f"### {st.session_state.project_title}")
+    header.markdown(f"**Agency:** {st.session_state.agency_name}")
+    header.divider()
 
-    # DATA TABS
+    # 4. TABS
     if not st.session_state.summary_ans:
-        with st.status("🚀 Extracting Unique Facts..."):
+        with st.status("🚀 Processing Tabs..."):
             st.session_state.bid_details = deep_query(doc, "List Solicitation #, Buyer, Email, and Phone.")
-            st.session_state.summary_ans = deep_query(doc, "Extract 5 unique project goals. Do not repeat.")
-            st.session_state.tech_ans = deep_query(doc, "List unique software/hardware specs. If none, say General IT.")
-            st.session_state.submission_ans = deep_query(doc, "List unique application steps.")
-            st.session_state.compliance_ans = deep_query(doc, "List unique insurance/legal rules.")
+            st.session_state.summary_ans = deep_query(doc, "List 5 unique project goals.")
+            st.session_state.tech_ans = deep_query(doc, "List unique software/hardware specs.")
+            st.session_state.submission_ans = deep_query(doc, "List application steps.")
+            st.session_state.compliance_ans = deep_query(doc, "List insurance/legal rules.")
             st.session_state.award_ans = deep_query(doc, "How they pick a winner.")
             st.rerun()
 
-    tabs = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-    tabs[0].write(st.session_state.bid_details)
-    tabs[1].info(st.session_state.summary_ans)
-    tabs[2].success(st.session_state.tech_ans)
-    tabs[3].warning(st.session_state.submission_ans)
-    tabs[4].error(st.session_state.compliance_ans)
-    tabs[5].write(st.session_state.award_ans)
+    t1, t2, t3, t4, t5, t6 = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
+    t1.write(st.session_state.bid_details)
+    t2.info(st.session_state.summary_ans)
+    t3.success(st.session_state.tech_ans)
+    t4.warning(st.session_state.submission_ans)
+    t5.error(st.session_state.compliance_ans)
+    t6.write(st.session_state.award_ans)
 
 elif st.session_state.all_bids:
     for b in st.session_state.all_bids:
@@ -121,14 +137,22 @@ elif st.session_state.all_bids:
             st.session_state.active_bid_text = b['full_text']
             st.rerun()
 else:
-    t1, t2, t3 = st.tabs(["📄 Search", "📊 Performance", "🔗 Portal URL"])
-    with t1:
+    # 5. HOME TABS (Restored URL Scraper)
+    tab1, tab2, tab3 = st.tabs(["📄 Search", "📊 Performance", "🔗 Agency URL"])
+    with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.rerun()
-    with t3:
-        # Added back the URL logic requested previously
-        url_in = st.text_input("Enter Agency URL:")
-        if st.button("Scan"):
-            st.info("Scanner logic restored. Add BeautifulSoup/Selenium logic here to fetch rows.")
+    with tab2:
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf")
+        if up_c:
+            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
+            st.session_state.analysis_mode = "Reporting"
+            st.rerun()
+    with tab3:
+        url_in = st.text_input("Enter Agency Portal URL:")
+        if st.button("Scan Portal"):
+            with st.spinner("Searching..."):
+                st.session_state.all_bids = scrape_agency_bids(url_in)
+                st.rerun()
