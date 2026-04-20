@@ -33,13 +33,19 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
+    """Strictly bulleted, short-fragment extraction. No full sentences."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system", 
-                "content": "You are a Government Data Extractor. Today is April 20, 2026. RULES: No greetings. No intros. Bullet points only. No repetition. Be concise."
+                "content": """You are a Government Data Extractor. Today is April 20, 2026. 
+                STRICT RULES: 
+                1. NO SENTENCES: Use short fragments only.
+                2. BULLETS ONLY: Use Markdown bullet points (-).
+                3. NO INTROS: No 'The agency is...' or 'Status is...'.
+                4. UNIQUE: No repetition of points."""
             },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
         ],
@@ -77,17 +83,17 @@ with st.sidebar:
         st.rerun()
 
 if st.session_state.active_bid_text:
-    # 1. Back Button
+    # Navigation
     if st.button("⬅️ Back"):
         st.session_state.active_bid_text = None
         st.rerun()
 
     doc = st.session_state.active_bid_text
 
-    # 2. DATA SCAN (Silent)
+    # Silent Scan
     if not st.session_state.agency_name:
         with st.status("🔍 Scanning..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name? ONLY name.")
+            st.session_state.agency_name = deep_query(doc, "Agency name? (e.g. Los Angeles County). ONLY name.")
             st.session_state.project_title = deep_query(doc, "Short project title? ONLY name.")
             raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY).")
             st.session_state.detected_due_date = raw_date
@@ -100,26 +106,26 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # 3. NO-GAP HEADER (Status > Project > Agency)
-    # Using a container to force layout proximity
-    header = st.container()
-    if st.session_state.status_flag == "OPEN":
-        header.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
-    else:
-        header.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
-    
-    header.markdown(f"### {st.session_state.project_title}")
-    header.markdown(f"**Agency:** {st.session_state.agency_name}")
-    header.divider()
+    # --- NO-GAP HEADER (Status > Project > Agency) ---
+    header_box = st.container()
+    with header_box:
+        if st.session_state.status_flag == "OPEN":
+            st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
+        else:
+            st.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
+        
+        st.markdown(f"### {st.session_state.project_title}")
+        st.markdown(f"**Agency:** {st.session_state.agency_name}")
+        st.divider()
 
-    # 4. TABS
+    # --- TABS ---
     if not st.session_state.summary_ans:
-        with st.status("🚀 Processing Tabs..."):
-            st.session_state.bid_details = deep_query(doc, "List Solicitation #, Buyer, Email, and Phone.")
-            st.session_state.summary_ans = deep_query(doc, "List 5 unique project goals.")
-            st.session_state.tech_ans = deep_query(doc, "List unique software/hardware specs.")
+        with st.status("🚀 Processing..."):
+            st.session_state.bid_details = deep_query(doc, "List: Solicitation #, Buyer, Email, Phone.")
+            st.session_state.summary_ans = deep_query(doc, "List 5 unique short project goals.")
+            st.session_state.tech_ans = deep_query(doc, "List specific software/hardware specs.")
             st.session_state.submission_ans = deep_query(doc, "List application steps.")
-            st.session_state.compliance_ans = deep_query(doc, "List insurance/legal rules.")
+            st.session_state.compliance_ans = deep_query(doc, "List insurance/legal requirements.")
             st.session_state.award_ans = deep_query(doc, "How they pick a winner.")
             st.rerun()
 
@@ -137,15 +143,15 @@ elif st.session_state.all_bids:
             st.session_state.active_bid_text = b['full_text']
             st.rerun()
 else:
-    # 5. HOME TABS (Restored URL Scraper)
-    tab1, tab2, tab3 = st.tabs(["📄 Search", "📊 Performance", "🔗 Agency URL"])
+    # 5. HOME TABS (Renamed Performance to Reporting)
+    tab1, tab2, tab3 = st.tabs(["📄 Search", "📊 Reporting", "🔗 Agency URL"])
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.rerun()
     with tab2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf")
+        up_c = st.file_uploader("Upload Reporting/SOW PDF", type="pdf")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
@@ -153,6 +159,5 @@ else:
     with tab3:
         url_in = st.text_input("Enter Agency Portal URL:")
         if st.button("Scan Portal"):
-            with st.spinner("Searching..."):
-                st.session_state.all_bids = scrape_agency_bids(url_in)
-                st.rerun()
+            st.session_state.all_bids = scrape_agency_bids(url_in)
+            st.rerun()
