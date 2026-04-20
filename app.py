@@ -35,12 +35,14 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
-    """AI Engine configured for Public Transparency and Clarity."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
-            {"role": "system", "content": "You are a Government Transparency Advocate. Your goal is to explain complex contracts to everyday taxpayers. Use simple, clear sentences. Avoid legalese, jargon, and verbatim copy-pasting. Be professional but accessible."},
+            {
+                "role": "system", 
+                "content": "You are a Government Transparency Liaison. You explain technical contracts to the public. Focus on facts, clear sentences, and performance data. Avoid repetitive phrases like 'as a taxpayer' or 'protecting your dollars.' Be direct and professional."
+            },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
         ],
         "temperature": 0.0 
@@ -73,6 +75,37 @@ def scrape_stable_bids(url):
         return found_bids[:10]
     except: return []
 
+def fetch_document_binary(url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    prefs = {"download.default_directory": DOWNLOAD_DIR}
+    options.add_experimental_option("prefs", prefs)
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(url)
+        time.sleep(6)
+        selectors = ["//button[contains(text(), 'Download')]", "//a[contains(text(), 'Download')]", "//a[contains(@class, 'btn-primary')]"]
+        btn = None
+        for s in selectors:
+            try:
+                btn = driver.find_element(By.XPATH, s)
+                if btn: break
+            except: continue
+        if btn:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(10)
+            files = os.listdir(DOWNLOAD_DIR)
+            if files:
+                file_path = os.path.join(DOWNLOAD_DIR, files[0])
+                with open(file_path, "rb") as f: data = f.read()
+                os.remove(file_path)
+                return data, files[0]
+        return None, None
+    except: return None, None
+    finally: driver.quit()
+
 # --- 3. UI LOGIC ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
@@ -98,24 +131,28 @@ if st.session_state.active_bid_text:
     # --- MODE 1: PUBLIC ACCOUNTABILITY & REPORTING MODE ---
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Translating Public Accountability Rules..."):
+            with st.status("📊 Analyzing Service Standards..."):
                 prompt = """
-                Translate the complex rules of this contract into a 'Public Accountability Report' 
-                for a person who pays taxes and wants to know how their money is protected. 
+                Provide a factual summary of how this contract manages service quality and vendor accountability. 
+                Use professional, everyday sentences. 
                 
-                Use simple, professional sentences. DO NOT copy the text verbatim.
+                Ensure you explicitly include the following data points:
                 
-                1. THE VENDOR'S PROMISE: Explain what the company promised the government 
-                   regarding service uptime (Availability) and how fast they must fix things (Restoral).
+                1. RELIABILITY STANDARDS (Availability): Explain the required percentage of time the 
+                   service must be working (e.g., 99.9%) and what happens if it falls below that.
                 
-                2. THE COST OF FAILURE: Explain exactly how much money the vendor has to pay 
-                   BACK to the government (refunds/credits) if they fail to meet their promises. 
-                   Describe these as 'Taxpayer Protections.'
+                2. FIXING PROBLEMS (Restoral/Time to Repair): Describe how fast the company must 
+                   respond to and fix outages, specifically mentioning the different tiers of 
+                   failures (like CAT 2, CAT 3, or single-site issues).
                 
-                3. WHEN THE CLOCK STOPS: Briefly explain the fair reasons a company might not 
-                   be penalized (like power outages or if the government itself causes the delay).
+                3. INSTALLATION GOALS (Provisioning): Explain the rules for setting up new services 
+                   on time and what the penalty is for missing those dates.
                 
-                Present this as a clean, easy-to-read 'Public Transparency Dashboard.'
+                4. ACCOUNTABILITY MEASURES: Detail the specific credits or refunds the government 
+                   is owed if these standards are not met.
+                
+                5. FAIR EXCEPTIONS: Summarize when the company is NOT held responsible for delays 
+                   (Stop Clock Conditions).
                 """
                 st.session_state.report_ans = deep_query(doc, prompt)
                 st.session_state.total_saved += 60
