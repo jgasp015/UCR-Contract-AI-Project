@@ -22,33 +22,39 @@ init_state()
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing! Please add GROQ_API_KEY to Streamlit Secrets.")
+    st.error("🔑 API Key missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE SCRUBBING ENGINE ---
+# --- 2. THE IMPROVED ANALYSIS ENGINE ---
 
 def deep_query(full_text, specific_prompt, is_header=False):
-    """FORCES CLEAN LISTS: NO INTROS, NO GHOST NUMBERS, NO JARGON."""
+    """
+    NEW LOGIC: Analyzes the START and the END of the file to find 
+    actual project goals, ignoring the middle legal 'wall of text'.
+    """
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    system_content = """You are a Plain English Translator for regular citizens. 
+    # Focus on the first 4 pages and the last 5 pages where the meat is
+    condensed_text = full_text[:8000] + "\n[...]\n" + full_text[-8000:]
+    
+    system_content = """You are an expert at explaining government projects to normal people.
     RULES:
-    1. START IMMEDIATELY: Never say 'Here is the list' or 'The goals are'.
-    2. NO NUMBERS: Do not use 1, 2, 3. Use only a dash (-).
-    3. ONE ITEM PER LINE: Put every point on a new line.
-    4. SHORT: Max 8 words per line.
-    5. SIMPLE: Use words a neighbor would understand. No legal-ese."""
+    1. IGNORE LEGAL JUNK: Skip rules about 'indemnity', 'lobbying', or 'gratuities'.
+    2. FIND THE MEAT: Look for the 'Price Sheet' or 'Commodity Description' at the end of the file.
+    3. MOM-TEST: Use 5-word lines. No big words. 
+    4. VERTICAL: Every point must start with '-' on a new line.
+    5. NO REPEATING: If you already said it, don't say it again."""
     
     if is_header:
-        system_content = "Respond with ONLY the name requested. Zero extra words."
+        system_content = "Return ONLY the name. No extra words."
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{condensed_text}"}
         ],
         "temperature": 0.0 
     }
@@ -57,26 +63,15 @@ def deep_query(full_text, specific_prompt, is_header=False):
         res = response.json()['choices'][0]['message']['content'].strip()
         
         if is_header:
-            # Strip labels if the AI hallucinates them
-            for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]:
-                res = res.replace(skip, "")
-            return res.split('\n')[0].strip()
+            return res.split('\n')[0].replace("Agency:", "").replace("Project:", "").strip()
         
-        # --- SCRUBBING LOGIC ---
-        lines = res.split('\n')
-        clean_lines = []
-        for line in lines:
-            l = line.strip()
-            # Skip empty lines, AI intros, and "ghost" numbers
-            if not l: continue
-            if any(intro in l.lower() for intro in ["here is", "the following", "goals are"]): continue
-            if l[0].isdigit() and (l.endswith(".") or len(l) < 4): continue
-            
-            # Ensure vertical bullet format
+        # Scrub out AI chatter and force vertical lines
+        lines = [line.strip() for line in res.split('\n') if line.strip() and not any(x in line.lower() for x in ["here is", "the goals", "text:"])]
+        formatted = ""
+        for l in lines:
             if not l.startswith("-"): l = f"- {l}"
-            clean_lines.append(l)
-            
-        return "\n".join(clean_lines)
+            formatted += f"{l}\n\n"
+        return formatted
     except: return "N/A"
 
 # --- 3. UI LAYOUT ---
@@ -89,12 +84,11 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
-    # Silent Data Fetching
     if not st.session_state.agency_name:
-        with st.status("Gathering details..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
-            st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
-            raw_date = deep_query(doc, "Deadline date (MM/DD/YYYY)?", is_header=True)
+        with st.status("Finding the important parts..."):
+            st.session_state.agency_name = deep_query(doc, "Which city or county is this?", is_header=True)
+            st.session_state.project_title = deep_query(doc, "What is the short project name?", is_header=True)
+            raw_date = deep_query(doc, "Deadline date MM/DD/YYYY?", is_header=True)
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
@@ -105,7 +99,7 @@ if st.session_state.active_bid_text:
                 st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- THE CLEAN HEADER ---
+    # --- HEADER (STAYS AT TOP) ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
@@ -115,15 +109,15 @@ if st.session_state.active_bid_text:
     st.write(f"**{st.session_state.agency_name}**")
     st.divider()
 
-    # --- DATA TABS ---
+    # --- TABS (SIMPLE LISTS) ---
     if not st.session_state.summary_ans:
-        with st.status("Simplifying for you..."):
-            st.session_state.bid_details = deep_query(doc, "List the Bid ID, Buyer, and Email.")
-            st.session_state.summary_ans = deep_query(doc, "What are the 5 main goals? Simple 1-line points.")
-            st.session_state.tech_ans = deep_query(doc, "What computers or software do they need?")
-            st.session_state.submission_ans = deep_query(doc, "Steps to sign up. 1 short line per step.")
-            st.session_state.compliance_ans = deep_query(doc, "Main 3 simple rules to follow.")
-            st.session_state.award_ans = deep_query(doc, "How do they choose the winner?")
+        with st.status("Analyzing Project Goals..."):
+            st.session_state.bid_details = deep_query(doc, "Bid ID? Person in charge? Their email?")
+            st.session_state.summary_ans = deep_query(doc, "Look at the PRICE SHEET/COMMODITY section. What are the 4 main goals? Use simple words.")
+            st.session_state.tech_ans = deep_query(doc, "What specific software or hardware is mentioned at the END of the file?")
+            st.session_state.submission_ans = deep_query(doc, "How to apply? Simple 3 steps.")
+            st.session_state.compliance_ans = deep_query(doc, "What are the 3 main rules? Use easy words like 'No paper' or 'Insurance needed'.")
+            st.session_state.award_ans = deep_query(doc, "How do they choose who wins? (Example: Lowest price).")
             st.rerun()
 
     t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
@@ -136,22 +130,19 @@ if st.session_state.active_bid_text:
     t_award.write(st.session_state.award_ans)
 
 else:
-    tab1, tab2, tab3 = st.tabs(["📄 Search Projects", "📊 Reporting", "🔗 Agency URL"])
+    tab1, tab2, tab3 = st.tabs(["📄 Search", "📊 Reporting", "🔗 Agency URL"])
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
-            reader = PdfReader(up)
-            st.session_state.active_bid_text = "".join([p.extract_text() for p in reader.pages])
+            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.rerun()
     with tab2:
         up_c = st.file_uploader("Upload Reporting PDF", type="pdf")
         if up_c:
-            reader = PdfReader(up_c)
-            st.session_state.active_bid_text = "".join([p.extract_text() for p in reader.pages])
+            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
     with tab3:
-        url_in = st.text_input("Agency Portal URL:")
-        if st.button("Scan Portal"):
-            st.warning("Portal scanner requires ChromeDriver in environment.")
+        url_in = st.text_input("Agency URL:")
+        if st.button("Scan"):
             st.rerun()
