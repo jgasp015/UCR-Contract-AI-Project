@@ -37,19 +37,21 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. THE DUAL INDEPENDENT ENGINES ---
 
 def reporting_query(full_text, specific_prompt):
-    """STRICT ENGINE FOR CONTRACT PERFORMANCE ONLY."""
+    """STRICT ENGINE FOR CONTRACT PERFORMANCE ONLY - NO INSTRUCTIONS OR DESCRIPTIONS."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Scan middle and end where SLAs and Outage reporting live
+    
+    # Target the second half where SLAs and Outage rules live
     mid = len(full_text) // 2
     context_text = full_text[mid:] 
 
-    system_content = """You are a Public Records Assistant. Your ONLY job is to extract contract rules.
+    system_content = """You are a Public Records Assistant.
     RULES:
-    1. DO NOT explain your instructions.
-    2. DO NOT mention 'No Jargon' or 'Find Everything'. 
-    3. LIST THE FACTS: Availability %, Setup days, and Outage rules.
-    4. REPORTING: Explain how a user reports a problem (e.g., Help Desk, Trouble Ticket).
-    5. VERTICAL: Use dash (-) and simple words for a mother."""
+    1. NO INTROS: Do not say 'Here are the rules' or 'This means'.
+    2. NO EXPLAINING: Do not explain the instructions I gave you.
+    3. MOM-TEST: Use simple words like 'Service Promise' instead of 'SLA'.
+    4. ACCURACY: Find the exact % for Uptime and exact minutes for CAT 2/CAT 3.
+    5. REPORTING: Find the specific name of the Help Desk or Tool used to report issues.
+    6. VERTICAL: Use only dashes (-) and new lines."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -72,7 +74,7 @@ def bid_query(full_text, specific_prompt, is_header=False):
     if is_header:
         context_text = full_text[:8000]
     elif any(x in specific_prompt.lower() for x in ["tech", "goal", "award", "software"]):
-        context_text = full_text[-15000:] # Deep scan end
+        context_text = full_text[-15000:] 
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
@@ -105,23 +107,16 @@ def format_vertical_list(text):
     seen = set()
     for line in lines:
         l = line.strip().lower()
-        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following"]): continue
+        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following", "requested", "instruction"]): continue
         if l in seen: continue 
         display_line = line.strip()
         if not display_line.startswith("-"): display_line = f"- {display_line}"
         clean_lines.append(display_line)
         seen.add(l)
-    return "\n\n".join(clean_lines[:10])
+    return "\n\n".join(clean_lines[:12])
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
-
-with st.sidebar:
-    st.metric("Est. Time Saved", f"{st.session_state.total_saved}m")
-    if st.button("🏠 Home / New Search"):
-        st.session_state.active_bid_text = None
-        clear_document_data()
-        st.rerun()
 
 if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
@@ -133,14 +128,15 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Extracting Performance Rules..."):
+            with st.status("📊 Extracting Contract Standards..."):
                 prompt = """
-                Extract the Service Promises:
-                1. UPTIME: What is the % required?
-                2. SETUP: How many days to install?
-                3. OUTAGES: Rules for CAT 2, CAT 3, and Excessive outages.
-                4. STOP CLOCK: When can they pause the timer?
-                5. REPORTING: How does the customer report a broken service?
+                Explain these service rules simply:
+                1. UPTIME: What is the % required (e.g., 99.9%)?
+                2. SETUP: How many days to install new items?
+                3. MAJOR PROBLEMS (CAT 2 & 3): How many minutes to fix a system-wide crash?
+                4. TOO SLOW: How many hours before it is an 'Excessive Outage'?
+                5. PAUSING: List the top 3 reasons they can pause the repair clock.
+                6. HOW TO REPORT: What is the name of the Help Desk or Tool used to report issues?
                 """
                 st.session_state.report_ans = reporting_query(doc, prompt)
                 st.session_state.total_saved += 60
@@ -150,10 +146,10 @@ if st.session_state.active_bid_text:
 
     else:
         if not st.session_state.agency_name:
-            with st.status("Reading Bid..."):
+            with st.status("Analyzing Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency issuing this?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project title?", is_header=True)
-                raw_date = bid_query(doc, "Deadline date?", is_header=True)
+                raw_date = bid_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
                 st.session_state.detected_due_date = raw_date
                 st.session_state.status_flag = "OPEN"
                 st.rerun()
@@ -164,8 +160,8 @@ if st.session_state.active_bid_text:
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Gathering Specific Facts..."):
-                st.session_state.bid_details = bid_query(doc, "Solicitation Number and Buyer Email only.")
+            with st.status("Gathering Facts..."):
+                st.session_state.bid_details = bid_query(doc, "Solicitation ID and Buyer Email only.")
                 st.session_state.summary_ans = bid_query(doc, "What are the specific project goals?")
                 st.session_state.tech_ans = bid_query(doc, "List specific software and gear needed.")
                 st.session_state.submission_ans = bid_query(doc, "3 simple steps to apply.")
@@ -200,4 +196,4 @@ else:
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
-        if st.button("Scan"): st.info("Requires driver.")
+        if st.button("Scan"): st.info("Requires local driver.")
