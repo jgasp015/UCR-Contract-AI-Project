@@ -37,21 +37,21 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. THE DUAL INDEPENDENT ENGINES ---
 
 def reporting_query(full_text, specific_prompt):
-    """STRICT ENGINE FOR CONTRACT PERFORMANCE ONLY - NO INSTRUCTIONS OR DESCRIPTIONS."""
+    """STRICT ENGINE: FORCES EXTRACTION OF REAL NUMBERS FROM TABLES."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Target the second half where SLAs and Outage rules live
-    mid = len(full_text) // 2
-    context_text = full_text[mid:] 
+    # SLAs are almost always in the last 30% of CALNET/Gov docs
+    start_point = int(len(full_text) * 0.6)
+    context_text = full_text[start_point:] 
 
-    system_content = """You are a Public Records Assistant.
+    system_content = """You are a Public Records Assistant. 
+    Your goal is to find the EXACT numbers in the Service Level Agreement (SLA) tables.
     RULES:
-    1. NO INTROS: Do not say 'Here are the rules' or 'This means'.
-    2. NO EXPLAINING: Do not explain the instructions I gave you.
-    3. MOM-TEST: Use simple words like 'Service Promise' instead of 'SLA'.
-    4. ACCURACY: Find the exact % for Uptime and exact minutes for CAT 2/CAT 3.
-    5. REPORTING: Find the specific name of the Help Desk or Tool used to report issues.
-    6. VERTICAL: Use only dashes (-) and new lines."""
+    1. NO PLACEHOLDERS: Do not guess. Do not say '1 hour' unless you see '1 hour' in the text.
+    2. FIND THE PREMIER LEVEL: Most of these have Basic, Standard, and Premier. Always report the Premier (best) level.
+    3. NO INTROS: Start immediately with facts.
+    4. REPORTING: Look for 'Methods of Outage Reporting'. Find the phone number or tool name.
+    5. VERTICAL: Use dash (-) and simple words for a mother."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -68,7 +68,7 @@ def reporting_query(full_text, specific_prompt):
     except: return "N/A"
 
 def bid_query(full_text, specific_prompt, is_header=False):
-    """PRECISION ENGINE FOR BID DOCUMENTS ONLY."""
+    """PRECISION ENGINE FOR BID DOCUMENTS."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
     if is_header:
@@ -78,9 +78,7 @@ def bid_query(full_text, specific_prompt, is_header=False):
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
-    system_content = """You are a Public Records Assistant.
-    RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER. 4. START IMMEDIATELY with '-'."""
-    
+    system_content = "You are a Public Records Assistant. RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER."
     if is_header: system_content = "Return ONLY the name requested. No labels."
 
     payload = {
@@ -113,7 +111,7 @@ def format_vertical_list(text):
         if not display_line.startswith("-"): display_line = f"- {display_line}"
         clean_lines.append(display_line)
         seen.add(l)
-    return "\n\n".join(clean_lines[:12])
+    return "\n\n".join(clean_lines[:15])
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -128,15 +126,15 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Extracting Contract Standards..."):
+            with st.status("📊 Scanning for specific Service Promises..."):
                 prompt = """
-                Explain these service rules simply:
-                1. UPTIME: What is the % required (e.g., 99.9%)?
-                2. SETUP: How many days to install new items?
-                3. MAJOR PROBLEMS (CAT 2 & 3): How many minutes to fix a system-wide crash?
-                4. TOO SLOW: How many hours before it is an 'Excessive Outage'?
-                5. PAUSING: List the top 3 reasons they can pause the repair clock.
-                6. HOW TO REPORT: What is the name of the Help Desk or Tool used to report issues?
+                Look at the SLA tables and extract the EXACT requirements:
+                1. UPTIME: What is the % required for the 'Premier' level?
+                2. SETUP: Look for 'Provisioning'. How many days to install?
+                3. MAJOR PROBLEMS: Look for 'Catastrophic Outage 2' and '3'. How many minutes/hours to fix?
+                4. TOO SLOW: Look for 'Excessive Outage'. What is the time limit?
+                5. PAUSING: Find 'Stop Clock Conditions'. List the top 3 simple reasons.
+                6. REPORTING: Look for 'Methods of Outage Reporting'. How does a person report a problem?
                 """
                 st.session_state.report_ans = reporting_query(doc, prompt)
                 st.session_state.total_saved += 60
@@ -145,12 +143,12 @@ if st.session_state.active_bid_text:
         st.markdown(st.session_state.report_ans)
 
     else:
+        # Standard Bid Mode Logic (preserved)
         if not st.session_state.agency_name:
-            with st.status("Analyzing Bid..."):
+            with st.status("Reading Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency issuing this?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project title?", is_header=True)
-                raw_date = bid_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
-                st.session_state.detected_due_date = raw_date
+                st.session_state.detected_due_date = bid_query(doc, "Deadline date?", is_header=True)
                 st.session_state.status_flag = "OPEN"
                 st.rerun()
 
@@ -160,7 +158,7 @@ if st.session_state.active_bid_text:
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Gathering Facts..."):
+            with st.status("Analyzing Bid Details..."):
                 st.session_state.bid_details = bid_query(doc, "Solicitation ID and Buyer Email only.")
                 st.session_state.summary_ans = bid_query(doc, "What are the specific project goals?")
                 st.session_state.tech_ans = bid_query(doc, "List specific software and gear needed.")
@@ -196,4 +194,4 @@ else:
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
-        if st.button("Scan"): st.info("Requires local driver.")
+        if st.button("Scan"): st.info("Requires driver.")
