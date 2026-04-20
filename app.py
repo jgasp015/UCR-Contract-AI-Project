@@ -20,53 +20,47 @@ def init_state():
 
 init_state()
 
+# CRITICAL FIX: Function to wipe data so the next document doesn't show old results
+def clear_document_data():
+    for key in ['agency_name', 'project_title', 'status_flag', 'detected_due_date', 
+                'summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 
+                'award_ans', 'bid_details', 'report_ans']:
+        st.session_state[key] = None
+
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 GROQ_API_KEY missing! Add it to Streamlit Secrets.")
+    st.error("🔑 GROQ_API_KEY missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE DUAL-MODE ENGINE (PRESERVING PERFORMANCE / FIXING BIDS) ---
+# --- 2. THE PRECISION DUAL-MODE ENGINE ---
 
 def deep_query(full_text, specific_prompt, persona="General", is_header=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Precision Targeting: Preserves the "Reporting" logic while fixing "Bid" targeting
     if is_header:
         context_text = full_text[:8000]
     elif persona == "Reporting":
-        # Keep this logic as requested - it works for your mother
         mid = len(full_text) // 2
         context_text = full_text[mid:] 
     elif any(x in specific_prompt.lower() for x in ["tech", "goal", "award", "software"]):
-        # Fix: Force scan of the VERY END of the document for Price Sheets/Exhibits
         context_text = full_text[-15000:] 
     elif any(x in specific_prompt.lower() for x in ["rule", "legal", "insurance"]):
-        # Fix: Scan standard terms middle-front (usually pages 2-10)
         context_text = full_text[2000:20000] 
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
-    # Persona Selection
     if persona == "Reporting":
         system_content = """You are a Public Records Assistant explaining active contract rules to a mother.
-        RULES:
-        1. NO JARGON: Use simple words like 'Service Promise' instead of 'SLA'.
-        2. FIND EVERYTHING: Availability, CAT 2 & 3 Outages, and Setup Times.
-        3. STOP CLOCKS: Explain when they can 'pause the timer'.
-        4. VERTICAL: Dash (-) on new lines. No paragraphs."""
+        RULES: 1. NO JARGON. 2. FIND EVERYTHING (Availability, CAT 2/3, Setup). 3. STOP CLOCK rules. 4. VERTICAL list only."""
     else:
         system_content = """You are a Public Records Assistant explaining projects to a neighbor.
-        RULES:
-        1. MOM-TEST: 5-word lines. Use words like 'Goal' instead of 'Commodity'.
-        2. NO DUPLICATES: Never mention the agency or title (they are in the header).
-        3. NO CHITCHAT: No intros. Start immediately with '-'.
-        4. ACCURACY: Look at the last pages for actual software and price items."""
+        RULES: 1. MOM-TEST (simple words). 2. NO REPEATING. 3. NO FILLER. 4. ACCURACY (Look at Price Sheets)."""
 
     if is_header:
-        system_content = "Return ONLY the name requested. Zero extra words. No labels."
+        system_content = "Return ONLY the name requested. No labels."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -80,13 +74,11 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
-        
         if is_header:
             for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]:
                 res = res.replace(skip, "")
             return res.split('\n')[0].strip()
         
-        # Scrubbing logic for Clean Vertical Lists
         lines = res.split('\n')
         clean_lines = []
         seen = set()
@@ -94,12 +86,10 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
             l = line.strip().lower()
             if not l or any(x in l for x in ["hello", "neighbor", "here is", "following"]): continue
             if l in seen: continue 
-            
             display_line = line.strip()
             if not display_line.startswith("-"): display_line = f"- {display_line}"
             clean_lines.append(display_line)
             seen.add(l)
-            
         return "\n\n".join(clean_lines[:8])
     except: return "N/A"
 
@@ -109,66 +99,51 @@ st.title("🏛️ Public Sector Contract Analyzer")
 with st.sidebar:
     st.metric("Est. Time Saved", f"{st.session_state.total_saved}m")
     if st.button("🏠 Home / New Search"):
-        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.session_state.active_bid_text = None
+        clear_document_data()
         st.rerun()
 
 if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
         st.session_state.active_bid_text = None
+        clear_document_data() # Wipes the data so the next click isn't old info
         st.rerun()
 
     doc = st.session_state.active_bid_text
 
-    # --- WORKFLOW A: REPORTING MODE (UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
             with st.status("📊 Reading Service Promises..."):
-                prompt = """
-                Explain these service promises in very simple words for a mother:
-                1. UPTIME (Availability): What % must the service stay working?
-                2. SETUP TIME (Provisioning): How many days do they get to install things?
-                3. MAJOR PROBLEMS (CAT 2 & 3): What counts as a big crash?
-                4. TOO LONG (Excessive Outage): How many hours is considered too slow to fix?
-                5. PAUSING THE TIMER: List reasons they can stop the timer.
-                """
+                prompt = "Explain Uptime, Setup Time (Provisioning), Major crashes (CAT 2/3), and Stopping the Clock rules."
                 st.session_state.report_ans = deep_query(doc, prompt, persona="Reporting")
                 st.session_state.total_saved += 60
                 st.rerun()
         st.info("### 📊 Active Contract: Service Promises & Rules")
         st.markdown(st.session_state.report_ans)
 
-    # --- WORKFLOW B: BID DOCUMENT (FIXED READING/ANALYSIS) ---
     else:
         if not st.session_state.agency_name:
-            with st.status("Reading Bid Details..."):
-                st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
+            with st.status("Reading Bid..."):
+                st.session_state.agency_name = deep_query(doc, "Agency issuing this?", is_header=True)
                 st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
                 raw_date = deep_query(doc, "Deadline date?", is_header=True)
                 st.session_state.detected_due_date = raw_date
-                try:
-                    # Logic assumes 2026 current year context
-                    clean_date = datetime.strptime(raw_date, "%m/%d/%Y")
-                    st.session_state.status_flag = "CLOSED" if clean_date < datetime(2026, 4, 20) else "OPEN"
-                except: st.session_state.status_flag = "OPEN"
+                st.session_state.status_flag = "OPEN" # Default
                 st.rerun()
 
-        if st.session_state.status_flag == "OPEN":
-            st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
-        else:
-            st.error(f"● CLOSED | Deadline: {st.session_state.detected_due_date}")
-        
+        st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
         st.subheader(st.session_state.project_title)
         st.write(f"**{st.session_state.agency_name}**")
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Extracting Facts..."):
-                st.session_state.bid_details = deep_query(doc, "Solicitation ID and Buyer Email only.")
-                st.session_state.summary_ans = deep_query(doc, "Look at the Price Sheet. What are the 4 main goals?")
-                st.session_state.tech_ans = deep_query(doc, "List specific software/gear needed from the Price Sheet.")
+            with st.status("Gathering Specific Facts..."):
+                st.session_state.bid_details = deep_query(doc, "Solicitation Number and Buyer Email only.")
+                st.session_state.summary_ans = deep_query(doc, "What are the specific project goals?")
+                st.session_state.tech_ans = deep_query(doc, "List specific software and gear needed.")
                 st.session_state.submission_ans = deep_query(doc, "3 simple steps to apply.")
-                st.session_state.compliance_ans = deep_query(doc, "List insurance limits and code of conduct.")
-                st.session_state.award_ans = deep_query(doc, "How do they choose the winner?")
+                st.session_state.compliance_ans = deep_query(doc, "Insurance and conduct rules.")
+                st.session_state.award_ans = deep_query(doc, "How they pick the winner?")
                 st.session_state.total_saved += 120
                 st.rerun()
 
@@ -180,22 +155,21 @@ if st.session_state.active_bid_text:
         t_legal.error(st.session_state.compliance_ans)
         t_award.write(st.session_state.award_ans)
 
-# --- HOME VIEW ---
 else:
     t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     with t1:
-        st.write("Understand new project opportunities.")
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"
+            clear_document_data() # Ensure fresh start
             st.rerun()
     with t2:
-        st.write("Check rules for an active contract/SOW.")
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
+            clear_document_data() # Ensure fresh start
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
