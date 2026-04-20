@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 # --- 1. SESSION STATE INITIALIZATION ---
+# Safely initializes variables to prevent AttributeError on first load
 if 'all_bids' not in st.session_state: st.session_state.all_bids = []
 if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 if 'active_bid_name' not in st.session_state: st.session_state.active_bid_name = None
@@ -21,6 +22,7 @@ keys = ['summary_ans', 'tech_ans', 'submission_ans', 'compliance_ans', 'award_an
 for key in keys:
     if key not in st.session_state: st.session_state[key] = None
 
+# Setup local download directory for portal file fetching
 DOWNLOAD_DIR = os.path.join(os.getcwd(), "temp_downloads")
 if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
 
@@ -51,7 +53,7 @@ def deep_query(full_text, specific_prompt):
                 3. SPECIFICITY: Always name the specific local agency (e.g., 'Los Angeles County').
                 4. PROFESSIONAL CLARITY: Use plain English but keep it serious. 
                    - Replace 'procurement' with 'purchase.'
-                   - Use 'failure to meet standards' instead of informal terms.
+                   - Use 'failure to meet standards' instead of informal terms like 'mess up.'
                 5. START DIRECTLY: The first sentence of your response must be a direct statement about the agency and the action (e.g., 'Los Angeles County is purchasing...')."""
             },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
@@ -64,6 +66,7 @@ def deep_query(full_text, specific_prompt):
     except: return "The analysis system is currently offline."
 
 def scrape_stable_bids(url):
+    """Scrapes portal tables for active business opportunities."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -87,6 +90,7 @@ def scrape_stable_bids(url):
     except: return []
 
 def fetch_document_binary(url):
+    """Attempts to click the portal download and capture the document binary."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -148,6 +152,7 @@ if st.session_state.active_bid_text:
     st.caption(f"Source: {st.session_state.active_bid_name}")
     doc = st.session_state.active_bid_text
 
+    # --- MODE 1: COMPLIANCE & ACCOUNTABILITY MODE ---
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
             with st.status("📊 Analyzing Service Standards..."):
@@ -168,11 +173,12 @@ if st.session_state.active_bid_text:
         st.info("### 📊 Performance & Accountability Dashboard")
         st.markdown(st.session_state.report_ans)
 
+    # --- MODE 2: BID DOCUMENTS (STANDARD COMPETITIVE ANALYSIS) ---
     else:
         if not st.session_state.summary_ans:
             with st.status("🚀 Scanning Project Details..."):
                 st.session_state.detected_due_date = deep_query(doc, "Extract only the deadline date.")
-                st.session_state.summary_ans = deep_query(doc, "Which specific local agency is this? Explain the project's purpose in factual, professional English.")
+                st.session_state.summary_ans = deep_query(doc, "Which specific local agency is this? Explain the project's purpose in factual English.")
                 st.session_state.tech_ans = deep_query(doc, "Summarize the equipment, hardware, or software being purchased.")
                 st.session_state.submission_ans = deep_query(doc, "What specific steps must a business take to apply for this work?")
                 st.session_state.compliance_ans = deep_query(doc, "Summarize the legal and insurance requirements.")
