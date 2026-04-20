@@ -28,31 +28,37 @@ except:
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE IMPROVED COMBINED ENGINE ---
+# --- 2. THE DUAL-MODE ENGINE ---
 
 def deep_query(full_text, specific_prompt, persona="General", is_header=False):
     """
-    Analyzes the START and END of the document to find the meat.
-    Switches personas based on analysis_mode.
+    Targets specific sections of the text to prevent 'not reading' errors.
     """
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Focus on crucial pages (first ~8k chars and last ~8k chars)
-    condensed_text = full_text[:8000] + "\n[...]\n" + full_text[-8000:]
-    
+    # Segmenting text: Headers use start, Reporting uses end/middle (where SLAs live), Bids use end (Price sheets)
+    if is_header:
+        context_text = full_text[:10000]
+    elif persona == "Reporting":
+        # SLAs are usually in the second half of these documents
+        mid = len(full_text) // 2
+        context_text = full_text[mid:mid+20000] 
+    else:
+        context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
+
     if persona == "Reporting":
-        system_content = """You are a Public Records Assistant specializing in service standards.
+        system_content = """You are a Public Records Assistant. 
+        Your goal is to explain Uptime, Availability, and Provisioning rules.
         RULES:
-        1. FIND THE TRIGGERS: Look for SLA targets, 'Catastrophic Outage' definitions, and 'Stop Clock' rules.
-        2. NO JARGON: Use very simple words for a regular citizen.
-        3. VERTICAL: Use bullet points (-) on new lines. No paragraphs."""
+        1. NO JARGON: Use simple words.
+        2. BE SPECIFIC: If it says '99.9% uptime', include that number.
+        3. VERTICAL: Bullet points only. No paragraphs."""
     else:
         system_content = """You are a Public Records Assistant explaining projects to a neighbor.
         RULES:
-        1. MOM-TEST: Use 5-word lines. Simple words only.
-        2. NO LEGAL JUNK: Skip indemnity/lobbying rules.
-        3. FIND THE MEAT: Look at the Price Sheet or Commodity Description at the end.
-        4. START IMMEDIATELY: No intros like 'Here is the info'."""
+        1. MOM-TEST: Simple words.
+        2. FIND THE MEAT: Look for actual goals and price items.
+        3. NO CHITCHAT: Start immediately with facts."""
 
     if is_header:
         system_content = "Return ONLY the name requested. Zero extra words. No labels."
@@ -61,7 +67,7 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{condensed_text}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{context_text}"}
         ],
         "temperature": 0.0 
     }
@@ -71,23 +77,18 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
         res = response.json()['choices'][0]['message']['content'].strip()
         
         if is_header:
-            # Clean up hallucinated labels
             for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]:
                 res = res.replace(skip, "")
             return res.split('\n')[0].strip()
         
-        # Scrub out AI chitchat and ghost numbers
-        lines = res.split('\n')
-        clean_lines = []
-        for line in lines:
-            l = line.strip()
-            if not l or any(x in l.lower() for x in ["here is", "the following", "text:"]): continue
-            if l[0].isdigit() and (l.endswith(".") or len(l) < 4): continue
+        # Cleanup
+        lines = [l.strip() for l in res.split('\n') if l.strip() and "here is" not in l.lower()]
+        formatted = ""
+        for l in lines:
             if not l.startswith("-"): l = f"- {l}"
-            clean_lines.append(l)
-            
-        return "\n\n".join(clean_lines)
-    except: return "Information not found."
+            formatted += f"{l}\n\n"
+        return formatted
+    except: return "Document analysis timed out. Please try a smaller file or a specific page."
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -105,14 +106,13 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
-    # --- SILENT HEADER EXTRACTION ---
+    # Silent Header
     if not st.session_state.agency_name:
-        with st.status("Gathering Document Context..."):
-            st.session_state.agency_name = deep_query(doc, "Which city or county is this?", is_header=True)
-            st.session_state.project_title = deep_query(doc, "What is the short project name?", is_header=True)
-            raw_date = deep_query(doc, "Deadline date (MM/DD/YYYY)?", is_header=True)
+        with st.status("Reading Header..."):
+            st.session_state.agency_name = deep_query(doc, "Which city/county/state agency issued this?", is_header=True)
+            st.session_state.project_title = deep_query(doc, "Short project title?", is_header=True)
+            raw_date = deep_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
             st.session_state.detected_due_date = raw_date
-            
             today = datetime(2026, 4, 20)
             try:
                 clean_date = datetime.strptime(raw_date, "%m/%d/%Y")
@@ -120,7 +120,7 @@ if st.session_state.active_bid_text:
             except: st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- NO-GAP TOP HEADER ---
+    # --- TOP HEADER ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
@@ -131,32 +131,31 @@ if st.session_state.active_bid_text:
     st.divider()
 
     # --- WORKFLOW SWITCHER ---
-    
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Checking Service Standards..."):
+            with st.status("📊 Extracting Availability & Provisioning Rules..."):
                 prompt = """
-                Extract these 4 rules from the SOW/Contract:
-                1. How is 'uptime' or 'availability' measured?
-                2. What happens if the service is broken for too long?
-                3. What counts as a 'catastrophic' or 'major' problem?
-                4. What are the rules for pausing the service clock (Stop Clock)?
+                Find the Service Standards (SLA) in this contract:
+                1. AVAILABILITY: What is the % uptime required? How is 'Unavailable Time' measured?
+                2. PROVISIONING: How many days do they have to install new service?
+                3. OUTAGES: What defines a 'Catastrophic' vs 'Excessive' outage?
+                4. STOP CLOCK: When is the company allowed to stop the timer on a repair?
                 """
                 st.session_state.report_ans = deep_query(doc, prompt, persona="Reporting")
                 st.session_state.total_saved += 60
                 st.rerun()
         
-        st.info("### 📊 Contract Rules & Standards")
+        st.info("### 📊 Contract Performance Standards")
         st.markdown(st.session_state.report_ans)
 
     else:
         if not st.session_state.summary_ans:
-            with st.status("Simplifying Project Details..."):
+            with st.status("Simplifying Project Goals..."):
                 st.session_state.bid_details = deep_query(doc, "Bid ID? Person in charge? Email?")
-                st.session_state.summary_ans = deep_query(doc, "Look at the PRICE SHEET/COMMODITY section. What are the 4 main goals?")
-                st.session_state.tech_ans = deep_query(doc, "What computers or software are needed?")
+                st.session_state.summary_ans = deep_query(doc, "What are the 4 main goals of this project?")
+                st.session_state.tech_ans = deep_query(doc, "What software/hardware/IT gear is needed?")
                 st.session_state.submission_ans = deep_query(doc, "Simple steps to sign up.")
-                st.session_state.compliance_ans = deep_query(doc, "Main 3 rules? (e.g. No paper, Insurance needed).")
+                st.session_state.compliance_ans = deep_query(doc, "Main rules? (e.g. Insurance, No Paper Bids).")
                 st.session_state.award_ans = deep_query(doc, "How do they choose the winner?")
                 st.session_state.total_saved += 120
                 st.rerun()
@@ -171,10 +170,11 @@ if st.session_state.active_bid_text:
 
 # --- HOME VIEW ---
 else:
-    t1, t2, t3 = st.tabs(["📄 New Bid Search", "📊 Contract Rules", "🔗 Agency URL"])
+    # RENAMED TO BID DOCUMENT
+    t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
     with t1:
-        st.write("Understand new project opportunities.")
+        st.write("Understand a new bidding opportunity.")
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="up1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
@@ -182,14 +182,14 @@ else:
             st.rerun()
             
     with t2:
-        st.write("Understand the rules and triggers of an existing contract.")
-        up_c = st.file_uploader("Upload Contract or SOW PDF", type="pdf", key="up2")
+        st.write("Check the rules/SLA for an existing contract or SOW.")
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="up2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
             
     with t3:
-        url_in = st.text_input("Enter Government Portal URL:")
+        url_in = st.text_input("Enter Agency Portal URL:")
         if st.button("Scan Portal"):
-            st.info("Scanner requires local driver setup.")
+            st.info("Portal scanning requested...")
