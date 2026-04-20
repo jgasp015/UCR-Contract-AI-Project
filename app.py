@@ -28,16 +28,15 @@ except:
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE IMPROVED DUAL-MODE ENGINE ---
+# --- 2. THE DUAL-MODE ENGINE ---
 
 def deep_query(full_text, specific_prompt, persona="General", is_header=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Segmenting text: Legal/Compliance usually sits in the first 15 pages
+    # Segmenting text to keep AI focused and prevent hallucinations
     if is_header:
         context_text = full_text[:10000]
     elif "rules" in specific_prompt.lower() or "legal" in specific_prompt.lower():
-        # Legal info is usually pages 2-15 in these LA County files
         context_text = full_text[5000:25000] 
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-12000:]
@@ -46,12 +45,12 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
         system_content = """You are a Public Records Assistant. 
         RULES: Simple words only. Vertical bullet points. No paragraphs."""
     else:
-        system_content = """You are a Public Records Assistant explaining projects to a neighbor.
+        system_content = """You are a Public Records Assistant.
         RULES:
-        1. MOM-TEST: Simple words only. 
-        2. NO DUPLICATES: Do not mention the deadline, agency name, or project title.
-        3. NO CHITCHAT: Never say 'Hello neighbor' or 'Here are the steps'. Start with '-'.
-        4. TRUE LEGAL: Under Legal, find insurance limits, gratuity rules, or child support rules."""
+        1. MOM-TEST: Use 5-word lines. Simple words only. 
+        2. NO DUPLICATES: Never mention the deadline or agency name.
+        3. NO CHITCHAT: No intros. Start with '-'.
+        4. ULTRA-SHORT: If asked for Details, give only the ID and Name."""
 
     if is_header:
         system_content = "Return ONLY the name requested. Zero extra words. No labels."
@@ -74,8 +73,8 @@ def deep_query(full_text, specific_prompt, persona="General", is_header=False):
                 res = res.replace(skip, "")
             return res.split('\n')[0].strip()
         
-        # Scrub out AI "Helper" phrases
-        lines = [l.strip() for l in res.split('\n') if l.strip() and not any(x in l.lower() for x in ["hello", "neighbor", "here is", "the following", "steps:"])]
+        # Scrub out helper phrases and empty list artifacts
+        lines = [l.strip() for l in res.split('\n') if l.strip() and not any(x in l.lower() for x in ["hello", "neighbor", "here is", "steps:"])]
         formatted = ""
         for l in lines:
             if not l.startswith("-"): l = f"- {l}"
@@ -100,10 +99,9 @@ if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
     if st.session_state.analysis_mode == "Reporting":
-        # (Reporting Mode Logic - Hidden)
         if not st.session_state.report_ans:
             with st.status("📊 Checking Standards..."):
-                prompt = "Find the Service Rules: Availability/Uptime, Provisioning days, and Outage definitions."
+                prompt = "Find Service Rules: Availability/Uptime, Provisioning days, and Outage definitions."
                 st.session_state.report_ans = deep_query(doc, prompt, persona="Reporting")
                 st.session_state.total_saved += 60
                 st.rerun()
@@ -111,7 +109,7 @@ if st.session_state.active_bid_text:
         st.markdown(st.session_state.report_ans)
 
     else:
-        # --- BID MODE (MOM-FRIENDLY) ---
+        # --- BID MODE ---
         if not st.session_state.agency_name:
             with st.status("Reading Header..."):
                 st.session_state.agency_name = deep_query(doc, "Agency issuing this?", is_header=True)
@@ -136,11 +134,12 @@ if st.session_state.active_bid_text:
 
         if not st.session_state.summary_ans:
             with st.status("Simplifying document..."):
-                st.session_state.bid_details = deep_query(doc, "Bid ID and Buyer contact info.")
-                st.session_state.summary_ans = deep_query(doc, "What are the 4 main goals? No repeat of header info.")
+                # SHORTENED DETAILS PROMPT
+                st.session_state.bid_details = deep_query(doc, "List ONLY the Solicitation Number and Buyer Email. 2 lines max.")
+                st.session_state.summary_ans = deep_query(doc, "What are the 4 main goals?")
                 st.session_state.tech_ans = deep_query(doc, "Hardware/Software required.")
-                st.session_state.submission_ans = deep_query(doc, "Steps to sign up (VSS/WebVen). No repeat of deadline.")
-                st.session_state.compliance_ans = deep_query(doc, "Find actual legal rules: Insurance limits, Child Support rules, and Gratuity rules.")
+                st.session_state.submission_ans = deep_query(doc, "Steps to sign up (VSS/WebVen).")
+                st.session_state.compliance_ans = deep_query(doc, "Insurance limits and conduct rules.")
                 st.session_state.award_ans = deep_query(doc, "How they pick the winner?")
                 st.session_state.total_saved += 120
                 st.rerun()
@@ -150,19 +149,21 @@ if st.session_state.active_bid_text:
         t_plan.info(st.session_state.summary_ans)
         t_tech.success(st.session_state.tech_ans)
         t_apply.warning(st.session_state.submission_ans)
-        t_legal.error(st.session_state.compliance_ans) # Fixed to find real legal rules
+        t_legal.error(st.session_state.compliance_ans)
         t_award.write(st.session_state.award_ans)
 
 else:
-    # HOME SCREEN
-    t1, t2, t3 = st.tabs(["📄 Bid Document Search", "📊 Contract Rules", "🔗 Agency URL"])
+    # HOME SCREEN - SEARCH REMOVED
+    t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     with t1:
+        st.write("Analyze new project opportunities.")
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"
             st.rerun()
     with t2:
+        st.write("Check rules for an active contract/SOW.")
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
