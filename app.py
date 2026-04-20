@@ -37,48 +37,48 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. THE DUAL INDEPENDENT ENGINES ---
 
 def reporting_query(full_text, specific_prompt):
-    """STRICT ANALYST ENGINE: EXCLUSIVELY FOR SOW/SLA COMPLIANCE."""
+    """FIXED: Targeted scanning to prevent 'Unable to parse' timeout errors."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Target the Service Level Agreement (SLA) section (usually starts 60% through)
-    start_point = int(len(full_text) * 0.6)
-    context_text = full_text[start_point:] 
+    # Target ONLY the end of the document where SLA tables are located
+    # This prevents the AI from getting overwhelmed by 100+ pages
+    context_text = full_text[-30000:] 
 
-    system_content = """You are a Contract Compliance Assistant for new contractors.
-    Your job is to extract CRITICAL reporting rules from the document text provided.
+    system_content = """You are a Contract Compliance Assistant. 
+    You must find and list the exact numbers from the SLA tables.
     RULES:
-    1. EXTRACT REAL NUMBERS: You must find the Premier Level % and the fix times in minutes/hours.
-    2. HOW TO REPORT: Find the section 'Methods of Outage Reporting'. State exactly how they report (Help Desk, Phone, Tool).
-    3. STOP CLOCKS: Find the 'Stop Clock Conditions'. List the specific reasons they can pause the timer.
-    4. NO GREETINGS: Start immediately with factual bullet points.
-    5. LANGUAGE: Use simple, clear English for a non-expert."""
+    1. FIND NUMBERS: Look for '99.9%', '15 minutes', '8 hours'.
+    2. REPORTING: Find the 'Trouble Ticket' or 'Help Desk' reporting method.
+    3. STOP CLOCKS: List the simple reasons they can pause the timer.
+    4. NO INTROS: Start immediately with facts.
+    5. VERTICAL: Use dash (-) and simple words for a mother."""
 
     payload = {
-        "model": "llama-3.1-70b-versatile", # Switched to 70B for higher accuracy in data extraction
+        "model": "llama-3.1-8b-instant", # Faster model to prevent timeout
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{context_text}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{context_text}"}
         ],
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=45)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
         return format_vertical_list(res)
-    except: return "Unable to parse contract data. Please ensure the PDF contains SLA tables."
+    except: return "The document is too large. Try uploading a smaller version or checking the SLA section specifically."
 
 def bid_query(full_text, specific_prompt, is_header=False):
-    """PRECISION ENGINE FOR BID DOCUMENTS."""
+    """BID ENGINE: Accuracy for bidding documents."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
     if is_header:
         context_text = full_text[:8000]
-    elif any(x in specific_prompt.lower() for x in ["tech", "goal", "award", "software"]):
+    elif any(x in specific_prompt.lower() for x in ["tech", "goal", "award"]):
         context_text = full_text[-15000:] 
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
-    system_content = "You are a Public Records Assistant. RULES: 1. Simple English. 2. No repeating. 3. No intros."
+    system_content = "You are a Public Records Assistant. RULES: 1. Simple English. 2. No filler. 3. Start with '-'."
     if is_header: system_content = "Return ONLY the name. No labels."
 
     payload = {
@@ -105,7 +105,7 @@ def format_vertical_list(text):
     seen = set()
     for line in lines:
         l = line.strip().lower()
-        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following", "requested"]): continue
+        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following"]): continue
         if l in seen: continue 
         display_line = line.strip()
         if not display_line.startswith("-"): display_line = f"- {display_line}"
@@ -115,13 +115,6 @@ def format_vertical_list(text):
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
-
-with st.sidebar:
-    st.metric("Est. Time Saved", f"{st.session_state.total_saved}m")
-    if st.button("🏠 Home"):
-        st.session_state.active_bid_text = None
-        clear_document_data()
-        st.rerun()
 
 if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
@@ -133,29 +126,28 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Scanning SLA Tables & Reporting Rules..."):
+            with st.status("📊 Extracting Performance Rules..."):
                 prompt = """
-                Extract the specific Performance Standards from this contract:
-                1. UPTIME: What is the exact Premier level percentage (e.g., 99.9%)?
-                2. FIX TIMES: How many minutes/hours for 'Catastrophic Outage 2', '3', and 'Excessive Outage'?
-                3. SETUP: How many days for 'Provisioning' or 'Installation'?
-                4. STOP CLOCK: List the specific reasons allowed to pause the timer (e.g. building access, power issues).
-                5. HOW TO REPORT: State the specific method a customer uses to report an issue (e.g., Help Desk name, Tool name).
+                Extract the Service Promises for a new contractor:
+                1. UPTIME: What is the Premier %?
+                2. FIX TIMES: Minutes/hours for CAT 2, CAT 3, and Excessive outages.
+                3. SETUP: Days to install?
+                4. STOP CLOCK: Simple reasons to pause the timer.
+                5. HOW TO REPORT: Method/Tool name for reporting issues.
                 """
                 st.session_state.report_ans = reporting_query(doc, prompt)
                 st.session_state.total_saved += 60
                 st.rerun()
-        
         st.info("### 📊 Active Contract: Service Performance & Reporting Guide")
         st.markdown(st.session_state.report_ans)
 
     else:
-        # Standard Bid Mode (Unchanged)
+        # Standard Bid Mode Logic
         if not st.session_state.agency_name:
-            with st.status("Reading Bid Header..."):
+            with st.status("Analyzing Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency issuing this?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project title?", is_header=True)
-                raw_date = bid_query(doc, "Deadline date?", is_header=True)
+                raw_date = bid_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
                 st.session_state.detected_due_date = raw_date
                 st.rerun()
 
@@ -165,13 +157,13 @@ if st.session_state.active_bid_text:
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Analyzing Project Details..."):
-                st.session_state.bid_details = bid_query(doc, "Solicitation ID and Buyer Email only.")
-                st.session_state.summary_ans = bid_query(doc, "What are the specific project goals?")
-                st.session_state.tech_ans = bid_query(doc, "List specific software and gear needed.")
-                st.session_state.submission_ans = bid_query(doc, "3 simple steps to apply.")
-                st.session_state.compliance_ans = bid_query(doc, "Insurance and conduct rules.")
-                st.session_state.award_ans = bid_query(doc, "How they pick the winner?")
+            with st.status("Simplifying document..."):
+                st.session_state.bid_details = bid_query(doc, "Solicitation ID and Email.")
+                st.session_state.summary_ans = bid_query(doc, "Project goals?")
+                st.session_state.tech_ans = bid_query(doc, "Software needed?")
+                st.session_state.submission_ans = bid_query(doc, "Application steps.")
+                st.session_state.compliance_ans = bid_query(doc, "Rules and insurance.")
+                st.session_state.award_ans = bid_query(doc, "Winning criteria?")
                 st.session_state.total_saved += 120
                 st.rerun()
 
@@ -201,4 +193,4 @@ else:
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
-        if st.button("Scan"): st.info("Requires local driver.")
+        if st.button("Scan"): st.info("Requires driver.")
