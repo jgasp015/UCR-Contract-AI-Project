@@ -26,7 +26,7 @@ for key in keys:
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing! Add GROQ_API_KEY to Streamlit Secrets.")
+    st.error("🔑 API Key missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -34,6 +34,7 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
+    """AI Engine strictly configured for clean Markdown lists and concise facts."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -41,8 +42,12 @@ def deep_query(full_text, specific_prompt):
             {
                 "role": "system", 
                 "content": """You are a Government Data Extractor. TODAY IS APRIL 20, 2026.
-                RULES: 1. No explanations. 2. If missing, say 'Not Specified'. 3. Be concise. 4. No greetings.
-                STATUS OPTIONS: OPEN, CLOSED, ACTIVE, AWARDED."""
+                STRICT RULES:
+                1. NO INTROS: Do not say 'Status:' or 'Project Title:' in your response.
+                2. FORMATTING: Use Markdown bullet points (-) for lists. 
+                3. CLARITY: Use short, professional sentences. 
+                4. NO GREETINGS: Start directly with the data.
+                5. TECHNOLOGY: If specific software/hardware is mentioned, you MUST list it."""
             },
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text}"}
         ],
@@ -51,40 +56,12 @@ def deep_query(full_text, specific_prompt):
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return response.json()['choices'][0]['message']['content'].strip()
-    except: return "Unknown"
-
-def scrape_agency_bids(url):
-    """Scrapes any government portal for active solicitations."""
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    blacklist = ["log out", "contact us", "home", "download", "page 1", "records", "reset"]
-    
-    try:
-        driver = webdriver.Chrome(options=options)
-        driver.get(url)
-        time.sleep(8) 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        driver.quit()
-        
-        found_bids = []
-        for row in soup.find_all('tr'):
-            text = row.get_text(separator=' ', strip=True)
-            # Looks for common solicitation markers
-            if any(m in text.lower() for m in ["rfb", "rfp", "solicitation", "bid", "contract"]):
-                if not any(bad in text.lower() for bad in blacklist):
-                    clean_name = " ".join(text.split())[:150].upper()
-                    found_bids.append({"name": clean_name, "full_text": text})
-        return found_bids[:10]
-    except: return []
+    except: return "Data missing."
 
 # --- 3. UI LOGIC ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
 with st.sidebar:
-    st.header("Project Performance")
-    st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     if st.button("🏠 Return Home"):
         for k in ['all_bids', 'active_bid_text', 'active_bid_name', 'agency_name', 'project_title'] + keys:
             st.session_state[k] = [] if k == 'all_bids' else None
@@ -99,14 +76,14 @@ if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
     if not st.session_state.agency_name:
-        with st.spinner("Processing..."):
+        with st.spinner("Processing Document..."):
             st.session_state.agency_name = deep_query(doc, "Agency name? ONLY the name.")
             st.session_state.project_title = deep_query(doc, "Project title? ONLY the name.")
             raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY). ONLY the date.")
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
-            status_ai = deep_query(doc, "Is this bid OPEN, CLOSED, ACTIVE, or AWARDED? (Today is April 20, 2026). Give 1 word.")
+            status_ai = deep_query(doc, "Is this bid OPEN, CLOSED, ACTIVE, or AWARDED? Give 1 word.")
             st.session_state.status_flag = status_ai.upper()
             
             try:
@@ -132,19 +109,18 @@ if st.session_state.active_bid_text:
     # --- TABS ---
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            st.session_state.report_ans = deep_query(doc, "Summary of standards: 1. Uptime 2. Fix times 3. Penalties. No intros.")
-            st.session_state.total_saved += 60
+            st.session_state.report_ans = deep_query(doc, "Summarize as a list: 1. Uptime % 2. Fix times 3. Penalties. Use bullet points.")
             st.rerun()
         st.markdown(st.session_state.report_ans)
     else:
         if not st.session_state.summary_ans:
-            st.session_state.summary_ans = deep_query(doc, "Project goal. No intros.")
-            st.session_state.tech_ans = deep_query(doc, "Required gear. No intros.")
-            st.session_state.submission_ans = deep_query(doc, "Steps to apply. No intros.")
-            st.session_state.compliance_ans = deep_query(doc, "Legal rules. No intros.")
-            st.session_state.award_ans = deep_query(doc, "Winner selection facts. No intros.")
-            st.session_state.total_saved += 120
-            st.rerun()
+            with st.status("🚀 Deep Analysis in Progress..."):
+                st.session_state.summary_ans = deep_query(doc, "Project goal as a bulleted list. No intros.")
+                st.session_state.tech_ans = deep_query(doc, "Search the text for software, SaaS, or hardware names. List them as bullet points. If none found, say 'General IT Services'.")
+                st.session_state.submission_ans = deep_query(doc, "List the steps to apply as a bulleted list. No intros.")
+                st.session_state.compliance_ans = deep_query(doc, "List insurance and legal rules as bullet points. No intros.")
+                st.session_state.award_ans = deep_query(doc, "Winner selection facts as bullet points. No intros.")
+                st.rerun()
 
         tabs = st.tabs(["📖 Project Plan", "🛠️ Technology", "📝 Application Process", "⚖️ Legal Rules", "💰 Winner Selection"])
         tabs[0].info(st.session_state.summary_ans)
@@ -153,23 +129,20 @@ if st.session_state.active_bid_text:
         tabs[3].error(st.session_state.compliance_ans)
         tabs[4].write(st.session_state.award_ans)
 
-# --- VIEW 2: SEARCH RESULTS ---
+# --- VIEW 2: SEARCH RESULTS (REDACTED) ---
 elif st.session_state.all_bids:
     if st.button("⬅️ Back"):
         st.session_state.all_bids = []
         st.rerun()
-    st.write("### Found Opportunities")
     for idx, bid in enumerate(st.session_state.all_bids):
-        with st.container(border=True):
-            st.write(f"**{bid['name']}**")
-            if st.button("Analyze", key=idx):
-                st.session_state.active_bid_text = bid['full_text']
-                st.session_state.active_bid_name = bid['name']
-                st.rerun()
+        if st.button(bid['name'], key=idx):
+            st.session_state.active_bid_text = bid['full_text']
+            st.session_state.active_bid_name = bid['name']
+            st.rerun()
 
 # --- VIEW 3: INITIAL SEARCH ---
 else:
-    t1, t2, t3 = st.tabs(["📄 New Project Search", "📊 Performance Standards", "🔗 Government Portal URL"])
+    t1, t2 = st.tabs(["📄 New Project Search", "📊 Performance Standards"])
     with t1:
         up_bid = st.file_uploader("Upload Bid PDF", type="pdf", key="up_bid")
         if up_bid:
@@ -184,9 +157,3 @@ else:
             st.session_state.active_bid_name = up_rep.name
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
-    with t3:
-        url = st.text_input("Paste Government Agency URL:")
-        if st.button("Scan Portal"):
-            with st.spinner("Searching portal for active projects..."):
-                st.session_state.all_bids = scrape_agency_bids(url)
-                st.rerun()
