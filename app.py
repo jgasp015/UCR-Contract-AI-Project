@@ -34,7 +34,6 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt):
-    """AI Engine for concise government data extraction."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -54,14 +53,13 @@ def deep_query(full_text, specific_prompt):
         return response.json()['choices'][0]['message']['content'].strip()
     except: return "Unknown"
 
-def scrape_it_bids(url):
-    """Scrapes portal specifically for Information Technology bids."""
+def scrape_agency_bids(url):
+    """Scrapes any government portal for active solicitations."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     blacklist = ["log out", "contact us", "home", "download", "page 1", "records", "reset"]
-    it_keywords = ["it", "software", "hardware", "network", "cloud", "technology", "computer", "data", "cybersecurity"]
     
     try:
         driver = webdriver.Chrome(options=options)
@@ -73,7 +71,8 @@ def scrape_it_bids(url):
         found_bids = []
         for row in soup.find_all('tr'):
             text = row.get_text(separator=' ', strip=True)
-            if any(k in text.lower() for k in it_keywords) and any(m in text.lower() for m in ["rfb", "rfp", "solicitation", "bid"]):
+            # Looks for common solicitation markers
+            if any(m in text.lower() for m in ["rfb", "rfp", "solicitation", "bid", "contract"]):
                 if not any(bad in text.lower() for bad in blacklist):
                     clean_name = " ".join(text.split())[:150].upper()
                     found_bids.append({"name": clean_name, "full_text": text})
@@ -106,12 +105,10 @@ if st.session_state.active_bid_text:
             raw_date = deep_query(doc, "Deadline? (MM/DD/YYYY). ONLY the date.")
             st.session_state.detected_due_date = raw_date
             
-            # --- STATUS LOGIC (Today: April 20, 2026) ---
             today = datetime(2026, 4, 20)
             status_ai = deep_query(doc, "Is this bid OPEN, CLOSED, ACTIVE, or AWARDED? (Today is April 20, 2026). Give 1 word.")
             st.session_state.status_flag = status_ai.upper()
             
-            # Safety override for past dates
             try:
                 clean_date = datetime.strptime(raw_date, "%m/%d/%Y")
                 if clean_date < today and "AWARDED" not in st.session_state.status_flag:
@@ -161,7 +158,7 @@ elif st.session_state.all_bids:
     if st.button("⬅️ Back"):
         st.session_state.all_bids = []
         st.rerun()
-    st.write("### IT Opportunities Found")
+    st.write("### Found Opportunities")
     for idx, bid in enumerate(st.session_state.all_bids):
         with st.container(border=True):
             st.write(f"**{bid['name']}**")
@@ -172,7 +169,7 @@ elif st.session_state.all_bids:
 
 # --- VIEW 3: INITIAL SEARCH ---
 else:
-    t1, t2, t3 = st.tabs(["📄 New Project Search", "📊 Performance Standards", "🔗 Live IT Portal"])
+    t1, t2, t3 = st.tabs(["📄 New Project Search", "📊 Performance Standards", "🔗 Government Portal URL"])
     with t1:
         up_bid = st.file_uploader("Upload Bid PDF", type="pdf", key="up_bid")
         if up_bid:
@@ -188,8 +185,8 @@ else:
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
     with t3:
-        url = st.text_input("Paste Government Portal URL (IT focus):")
-        if st.button("Scan for IT Bids"):
-            with st.spinner("Scanning portal for Technology bids..."):
-                st.session_state.all_bids = scrape_it_bids(url)
+        url = st.text_input("Paste Government Agency URL:")
+        if st.button("Scan Portal"):
+            with st.spinner("Searching portal for active projects..."):
+                st.session_state.all_bids = scrape_agency_bids(url)
                 st.rerun()
