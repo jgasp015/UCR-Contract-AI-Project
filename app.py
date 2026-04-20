@@ -12,7 +12,8 @@ def init_state():
         'agency_name': None, 'project_title': None, 'status_flag': None,
         'detected_due_date': None, 'analysis_mode': "Standard",
         'summary_ans': None, 'tech_ans': None, 'submission_ans': None,
-        'compliance_ans': None, 'award_ans': None, 'bid_details': None
+        'compliance_ans': None, 'award_ans': None, 'bid_details': None,
+        'report_ans': None, 'total_saved': 0
     }
     for k, v in keys.items():
         if k not in st.session_state: st.session_state[k] = v
@@ -22,60 +23,49 @@ init_state()
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
-    st.error("🔑 API Key missing!")
+    st.error("🔑 GROQ_API_KEY missing!")
     st.stop()
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE IMPROVED ANALYSIS ENGINE ---
+# --- 2. CORE FUNCTIONS ---
 
-def deep_query(full_text, specific_prompt, is_header=False):
-    """
-    NEW LOGIC: Analyzes the START and the END of the file to find 
-    actual project goals, ignoring the middle legal 'wall of text'.
-    """
+def deep_query(full_text, specific_prompt, persona="General", is_header=False):
+    """Unified AI Engine with Persona Switching."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Focus on the first 4 pages and the last 5 pages where the meat is
-    condensed_text = full_text[:8000] + "\n[...]\n" + full_text[-8000:]
-    
-    system_content = """You are an expert at explaining government projects to normal people.
-    RULES:
-    1. IGNORE LEGAL JUNK: Skip rules about 'indemnity', 'lobbying', or 'gratuities'.
-    2. FIND THE MEAT: Look for the 'Price Sheet' or 'Commodity Description' at the end of the file.
-    3. MOM-TEST: Use 5-word lines. No big words. 
-    4. VERTICAL: Every point must start with '-' on a new line.
-    5. NO REPEATING: If you already said it, don't say it again."""
+    if persona == "Reporting":
+        system_content = "You are a senior Government Procurement and Reporting Analyst. You specialize in Technical Qualifiers, SLA triggers, and SOW compliance. Provide audit-ready data in simple vertical bullet points."
+    else:
+        system_content = "You are a Government Data Extractor. Today is April 20, 2026. RULES: No greetings. No intros. Bullet points only. Max 8 words per line."
     
     if is_header:
-        system_content = "Return ONLY the name. No extra words."
+        system_content = "Respond with ONLY the name requested. Zero extra words."
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{condensed_text}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
         ],
         "temperature": 0.0 
     }
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
-        
         if is_header:
             return res.split('\n')[0].replace("Agency:", "").replace("Project:", "").strip()
-        
-        # Scrub out AI chatter and force vertical lines
-        lines = [line.strip() for line in res.split('\n') if line.strip() and not any(x in line.lower() for x in ["here is", "the goals", "text:"])]
-        formatted = ""
-        for l in lines:
-            if not l.startswith("-"): l = f"- {l}"
-            formatted += f"{l}\n\n"
-        return formatted
+        return res
     except: return "N/A"
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
+
+with st.sidebar:
+    st.metric("Time Saved", f"{st.session_state.total_saved}m")
+    if st.button("🏠 Home / New Search"):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.rerun()
 
 if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
@@ -84,22 +74,22 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
+    # --- SILENT HEADER EXTRACTION ---
     if not st.session_state.agency_name:
-        with st.status("Finding the important parts..."):
-            st.session_state.agency_name = deep_query(doc, "Which city or county is this?", is_header=True)
-            st.session_state.project_title = deep_query(doc, "What is the short project name?", is_header=True)
-            raw_date = deep_query(doc, "Deadline date MM/DD/YYYY?", is_header=True)
+        with st.status("Analyzing Document Context..."):
+            st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
+            st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
+            raw_date = deep_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
             st.session_state.detected_due_date = raw_date
             
             today = datetime(2026, 4, 20)
             try:
                 clean_date = datetime.strptime(raw_date, "%m/%d/%Y")
                 st.session_state.status_flag = "CLOSED" if clean_date < today else "OPEN"
-            except:
-                st.session_state.status_flag = "OPEN"
+            except: st.session_state.status_flag = "OPEN"
             st.rerun()
 
-    # --- HEADER (STAYS AT TOP) ---
+    # --- TOP HEADER ---
     if st.session_state.status_flag == "OPEN":
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
     else:
@@ -109,40 +99,69 @@ if st.session_state.active_bid_text:
     st.write(f"**{st.session_state.agency_name}**")
     st.divider()
 
-    # --- TABS (SIMPLE LISTS) ---
-    if not st.session_state.summary_ans:
-        with st.status("Analyzing Project Goals..."):
-            st.session_state.bid_details = deep_query(doc, "Bid ID? Person in charge? Their email?")
-            st.session_state.summary_ans = deep_query(doc, "Look at the PRICE SHEET/COMMODITY section. What are the 4 main goals? Use simple words.")
-            st.session_state.tech_ans = deep_query(doc, "What specific software or hardware is mentioned at the END of the file?")
-            st.session_state.submission_ans = deep_query(doc, "How to apply? Simple 3 steps.")
-            st.session_state.compliance_ans = deep_query(doc, "What are the 3 main rules? Use easy words like 'No paper' or 'Insurance needed'.")
-            st.session_state.award_ans = deep_query(doc, "How do they choose who wins? (Example: Lowest price).")
-            st.rerun()
-
-    t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
+    # --- WORKFLOW SWITCHER ---
     
-    t_det.markdown(st.session_state.bid_details)
-    t_plan.info(st.session_state.summary_ans)
-    t_tech.success(st.session_state.tech_ans)
-    t_apply.warning(st.session_state.submission_ans)
-    t_legal.error(st.session_state.compliance_ans)
-    t_award.write(st.session_state.award_ans)
+    # WORKFLOW A: REPORTING MODE (Original Logic Restored)
+    if st.session_state.analysis_mode == "Reporting":
+        if not st.session_state.report_ans:
+            with st.status("📊 Extracting Technical Qualifiers & SLA Triggers..."):
+                prompt = """
+                Extract SLA Technical Qualifiers from this SOW:
+                1. Triggers for Availability vs. Unavailable Time.
+                2. Excessive Outage duration thresholds.
+                3. Catastrophic Outage (CAT 2 or CAT 3) definitions.
+                4. Valid 'Stop Clock' conditions.
+                Use simple words for a regular citizen. Vertical bullet points only.
+                """
+                st.session_state.report_ans = deep_query(doc, prompt, persona="Reporting")
+                st.session_state.total_saved += 60
+                st.rerun()
+        
+        st.info("### 📊 Senior Analyst: Reporting & Compliance Snapshot")
+        st.markdown(st.session_state.report_ans)
 
+    # WORKFLOW B: STANDARD BID MODE (Mom-friendly Logic)
+    else:
+        if not st.session_state.summary_ans:
+            with st.status("Simplifying for citizens..."):
+                st.session_state.bid_details = deep_query(doc, "ID number, Buyer name, and Email.")
+                st.session_state.summary_ans = deep_query(doc, "What are the 5 main things they want to do? 1 line each.")
+                st.session_state.tech_ans = deep_query(doc, "Computers or software needed? 1 line each.")
+                st.session_state.submission_ans = deep_query(doc, "Simple steps to sign up.")
+                st.session_state.compliance_ans = deep_query(doc, "Main 3 rules to follow (Simple words).")
+                st.session_state.award_ans = deep_query(doc, "How they pick the winner?")
+                st.session_state.total_saved += 120
+                st.rerun()
+
+        t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
+        t_det.markdown(st.session_state.bid_details)
+        t_plan.info(st.session_state.summary_ans)
+        t_tech.success(st.session_state.tech_ans)
+        t_apply.warning(st.session_state.submission_ans)
+        t_legal.error(st.session_state.compliance_ans)
+        t_award.write(st.session_state.award_ans)
+
+# --- HOME VIEW ---
 else:
-    tab1, tab2, tab3 = st.tabs(["📄 Search", "📊 Reporting", "🔗 Agency URL"])
-    with tab1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf")
+    t1, t2, t3 = st.tabs(["📄 Search Projects", "📊 Reporting", "🔗 Agency URL"])
+    
+    with t1:
+        st.write("Analyze new bid opportunities.")
+        up = st.file_uploader("Upload Bid PDF", type="pdf", key="up1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
+            st.session_state.analysis_mode = "Standard"
             st.rerun()
-    with tab2:
-        up_c = st.file_uploader("Upload Reporting PDF", type="pdf")
+            
+    with t2:
+        st.write("Extract SLA and reporting triggers from existing contracts/SOWs.")
+        up_c = st.file_uploader("Upload SOW PDF", type="pdf", key="up2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
-    with tab3:
-        url_in = st.text_input("Agency URL:")
-        if st.button("Scan"):
-            st.rerun()
+            
+    with t3:
+        url_in = st.text_input("Agency Portal URL:")
+        if st.button("Scan Portal"):
+            st.info("Portal scanning requested...")
