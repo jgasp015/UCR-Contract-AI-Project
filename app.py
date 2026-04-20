@@ -37,35 +37,35 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. THE DUAL INDEPENDENT ENGINES ---
 
 def reporting_query(full_text, specific_prompt):
-    """STRICT ENGINE: FORCES EXTRACTION OF REAL NUMBERS FROM TABLES."""
+    """STRICT ANALYST ENGINE: EXCLUSIVELY FOR SOW/SLA COMPLIANCE."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # SLAs are almost always in the last 30% of CALNET/Gov docs
+    # Target the Service Level Agreement (SLA) section (usually starts 60% through)
     start_point = int(len(full_text) * 0.6)
     context_text = full_text[start_point:] 
 
-    system_content = """You are a Public Records Assistant. 
-    Your goal is to find the EXACT numbers in the Service Level Agreement (SLA) tables.
+    system_content = """You are a Contract Compliance Assistant for new contractors.
+    Your job is to extract CRITICAL reporting rules from the document text provided.
     RULES:
-    1. NO PLACEHOLDERS: Do not guess. Do not say '1 hour' unless you see '1 hour' in the text.
-    2. FIND THE PREMIER LEVEL: Most of these have Basic, Standard, and Premier. Always report the Premier (best) level.
-    3. NO INTROS: Start immediately with facts.
-    4. REPORTING: Look for 'Methods of Outage Reporting'. Find the phone number or tool name.
-    5. VERTICAL: Use dash (-) and simple words for a mother."""
+    1. EXTRACT REAL NUMBERS: You must find the Premier Level % and the fix times in minutes/hours.
+    2. HOW TO REPORT: Find the section 'Methods of Outage Reporting'. State exactly how they report (Help Desk, Phone, Tool).
+    3. STOP CLOCKS: Find the 'Stop Clock Conditions'. List the specific reasons they can pause the timer.
+    4. NO GREETINGS: Start immediately with factual bullet points.
+    5. LANGUAGE: Use simple, clear English for a non-expert."""
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "llama-3.1-70b-versatile", # Switched to 70B for higher accuracy in data extraction
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{context_text}"}
+            {"role": "user", "content": f"{specific_prompt}\n\nDOCUMENT TEXT:\n{context_text}"}
         ],
         "temperature": 0.0 
     }
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=45)
         res = response.json()['choices'][0]['message']['content'].strip()
         return format_vertical_list(res)
-    except: return "N/A"
+    except: return "Unable to parse contract data. Please ensure the PDF contains SLA tables."
 
 def bid_query(full_text, specific_prompt, is_header=False):
     """PRECISION ENGINE FOR BID DOCUMENTS."""
@@ -78,8 +78,8 @@ def bid_query(full_text, specific_prompt, is_header=False):
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
-    system_content = "You are a Public Records Assistant. RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER."
-    if is_header: system_content = "Return ONLY the name requested. No labels."
+    system_content = "You are a Public Records Assistant. RULES: 1. Simple English. 2. No repeating. 3. No intros."
+    if is_header: system_content = "Return ONLY the name. No labels."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -105,7 +105,7 @@ def format_vertical_list(text):
     seen = set()
     for line in lines:
         l = line.strip().lower()
-        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following", "requested", "instruction"]): continue
+        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following", "requested"]): continue
         if l in seen: continue 
         display_line = line.strip()
         if not display_line.startswith("-"): display_line = f"- {display_line}"
@@ -115,6 +115,13 @@ def format_vertical_list(text):
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
+
+with st.sidebar:
+    st.metric("Est. Time Saved", f"{st.session_state.total_saved}m")
+    if st.button("🏠 Home"):
+        st.session_state.active_bid_text = None
+        clear_document_data()
+        st.rerun()
 
 if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
@@ -126,30 +133,30 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Scanning for specific Service Promises..."):
+            with st.status("📊 Scanning SLA Tables & Reporting Rules..."):
                 prompt = """
-                Look at the SLA tables and extract the EXACT requirements:
-                1. UPTIME: What is the % required for the 'Premier' level?
-                2. SETUP: Look for 'Provisioning'. How many days to install?
-                3. MAJOR PROBLEMS: Look for 'Catastrophic Outage 2' and '3'. How many minutes/hours to fix?
-                4. TOO SLOW: Look for 'Excessive Outage'. What is the time limit?
-                5. PAUSING: Find 'Stop Clock Conditions'. List the top 3 simple reasons.
-                6. REPORTING: Look for 'Methods of Outage Reporting'. How does a person report a problem?
+                Extract the specific Performance Standards from this contract:
+                1. UPTIME: What is the exact Premier level percentage (e.g., 99.9%)?
+                2. FIX TIMES: How many minutes/hours for 'Catastrophic Outage 2', '3', and 'Excessive Outage'?
+                3. SETUP: How many days for 'Provisioning' or 'Installation'?
+                4. STOP CLOCK: List the specific reasons allowed to pause the timer (e.g. building access, power issues).
+                5. HOW TO REPORT: State the specific method a customer uses to report an issue (e.g., Help Desk name, Tool name).
                 """
                 st.session_state.report_ans = reporting_query(doc, prompt)
                 st.session_state.total_saved += 60
                 st.rerun()
-        st.info("### 📊 Active Contract: Service Promises & Rules")
+        
+        st.info("### 📊 Active Contract: Service Performance & Reporting Guide")
         st.markdown(st.session_state.report_ans)
 
     else:
-        # Standard Bid Mode Logic (preserved)
+        # Standard Bid Mode (Unchanged)
         if not st.session_state.agency_name:
-            with st.status("Reading Bid..."):
+            with st.status("Reading Bid Header..."):
                 st.session_state.agency_name = bid_query(doc, "Agency issuing this?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project title?", is_header=True)
-                st.session_state.detected_due_date = bid_query(doc, "Deadline date?", is_header=True)
-                st.session_state.status_flag = "OPEN"
+                raw_date = bid_query(doc, "Deadline date?", is_header=True)
+                st.session_state.detected_due_date = raw_date
                 st.rerun()
 
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
@@ -158,7 +165,7 @@ if st.session_state.active_bid_text:
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Analyzing Bid Details..."):
+            with st.status("Analyzing Project Details..."):
                 st.session_state.bid_details = bid_query(doc, "Solicitation ID and Buyer Email only.")
                 st.session_state.summary_ans = bid_query(doc, "What are the specific project goals?")
                 st.session_state.tech_ans = bid_query(doc, "List specific software and gear needed.")
@@ -186,7 +193,7 @@ else:
             clear_document_data()
             st.rerun()
     with t2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
+        up_c = st.file_uploader("Upload SOW or Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
@@ -194,4 +201,4 @@ else:
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
-        if st.button("Scan"): st.info("Requires driver.")
+        if st.button("Scan"): st.info("Requires local driver.")
