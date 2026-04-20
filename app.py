@@ -4,9 +4,6 @@ import time
 import os
 from pypdf import PdfReader
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from bs4 import BeautifulSoup
 
 # --- 1. SESSION STATE ---
 def init_state():
@@ -33,19 +30,20 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. CORE FUNCTIONS ---
 
 def deep_query(full_text, specific_prompt, is_header=False):
-    """FORCES SIMPLE ENGLISH AND SHORT BULLETS ONLY."""
+    """FORCES VERTICAL LISTS AND SIMPLE ENGLISH."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    system_content = """You are a Plain English Translator for government documents. 
+    # The "Mom Test" System Prompt
+    system_content = """You are a helpful assistant explaining things to a regular citizen. 
     RULES:
-    1. SIMPLE WORDS: Use 5th-grade level English.
-    2. ONE LINE ONLY: Each bullet point must be one short line.
-    3. NO PARAGRAPHS: Never write a paragraph.
-    4. NO LABELS: Do not repeat the prompt.
-    5. NO LEGAL TALK: Replace 'indemnify' with 'be responsible' or 'pay for'."""
+    1. VERTICAL LISTS: Put every single point on a NEW LINE. Use a dash (-).
+    2. SIMPLE WORDS: No legal words. Use words a 5th grader knows.
+    3. NO PARAGRAPHS: Never group sentences together.
+    4. SHORT: Max 12 words per line.
+    5. NO LABELS: Do not repeat the question."""
     
     if is_header:
-        system_content = "Respond with ONLY the name requested. Zero extra words."
+        system_content = "Respond with ONLY the name requested. No extra words."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -76,7 +74,7 @@ if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
     if not st.session_state.agency_name:
-        with st.status("Reading document..."):
+        with st.status("Cleaning up document..."):
             st.session_state.agency_name = deep_query(doc, "Agency name?", is_header=True)
             st.session_state.project_title = deep_query(doc, "Project title?", is_header=True)
             raw_date = deep_query(doc, "Deadline date MM/DD/YYYY?", is_header=True)
@@ -100,19 +98,21 @@ if st.session_state.active_bid_text:
     st.write(f"**{st.session_state.agency_name}**")
     st.divider()
 
-    # --- TABS (NOW IN SIMPLE ENGLISH) ---
+    # --- TABS (FORCED VERTICAL SCANNABLE LISTS) ---
     if not st.session_state.summary_ans:
-        with st.status("Simplifying document..."):
-            st.session_state.bid_details = deep_query(doc, "List the ID number, buyer name, and email in 1 line each.")
-            st.session_state.summary_ans = deep_query(doc, "What are the 5 main things they want to do? Use 1 line per goal.")
-            st.session_state.tech_ans = deep_query(doc, "What computers or software do they need? 1 line per item.")
-            st.session_state.submission_ans = deep_query(doc, "How do I sign up? Give me simple steps, 1 line each.")
-            st.session_state.compliance_ans = deep_query(doc, "What are the main rules I must follow? Simple words only.")
-            st.session_state.award_ans = deep_query(doc, "How do they pick who wins? Simple points.")
+        with st.status("Translating for citizens..."):
+            st.session_state.bid_details = deep_query(doc, "Give me the ID number and the person to call (with email) on separate lines.")
+            st.session_state.summary_ans = deep_query(doc, "In simple words, what are the 5 goals? Use a separate line for each.")
+            st.session_state.tech_ans = deep_query(doc, "What computers or software do they need? List them line by line.")
+            st.session_state.submission_ans = deep_query(doc, "How do I sign up? Give me 3-5 simple steps on separate lines.")
+            st.session_state.compliance_ans = deep_query(doc, "What are the 3 biggest rules to follow? Use very simple words.")
+            st.session_state.award_ans = deep_query(doc, "How do they choose the winner? 1 simple line per reason.")
             st.rerun()
 
     t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-    t_det.write(st.session_state.bid_details)
+    
+    # Displaying with Markdown to ensure vertical spacing
+    t_det.markdown(st.session_state.bid_details)
     t_plan.info(st.session_state.summary_ans)
     t_tech.success(st.session_state.tech_ans)
     t_apply.warning(st.session_state.submission_ans)
