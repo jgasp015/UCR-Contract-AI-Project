@@ -83,60 +83,50 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: MASTER KEYWORD PORTAL SCANNER (THE FIX) ---
-def master_portal_scanner(url):
-    """Universal scraper with a massive IT/EV keyword database."""
+# --- 4. ENGINE C: DEEP PORTAL ANALYZER (FIXED & EXPANDED) ---
+def deep_portal_scanner(url):
+    """Scrapes for links + Commodity names from portal tables."""
     try:
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # MASTER KEYWORD LIST
-        keywords = [
-            # Hardware
-            "CPU", "GPU", "RAM", "MOTHERBOARD", "CHIPSET", "SILICON CHIP", "SSD", "HDD", "NAS", "PRINTER", "SCANNER", 
-            "TOUCHSCREEN", "ROUTER", "SWITCH", "MODEM", "FIREWALL", "ACCESS POINT", "ETHERNET", "SERVER", "DATA CENTER", 
-            "RACK", "WEARABLES", "SMART GLASSES", "AR/VR", "QUANTUM", "IOT",
-            # Software
-            "AGILE", "SCRUM", "KANBAN", "DEVOPS", "CI/CD", "SDLC", "SOURCE CODE", "API ", "DEBUGGING", "JAVASCRIPT", 
-            "PYTHON", "OPEN SOURCE", "SAAS", "PAAS", "IAAS", "CMS", "OPERATING SYSTEM", "RANSOMWARE", "ENCRYPTION", 
-            "MALWARE", "DAST", "SAST", "VULNERABILITY", "AI ", "MACHINE LEARNING", "GENERATIVE AI", "BIG DATA", "BI ",
-            # Telecom
-            "5G ", "6G ", "FIBER", "BROADBAND", "WI-FI", "SATCOM", "V2X", "SD-WAN", "EDGE COMPUTING", "VOIP", "SMS", "RCS", 
-            "FWA", "ESIM", "DIRECT-TO-CELL", "UC ", "ISAC", "AGENTIC AI", "NTN",
-            # EV Tech
-            "BATTERY MANAGEMENT", "TRACTION MOTOR", "POWER INVERTER", "REGENERATIVE BRAKING", "EVSE", "CHARGING STATION", 
-            "V2V", "AUTONOMOUS", "ADAS", "TELEMATICS", "INFOTAINMENT", "OTA UPDATES",
-            # Cloud/Management
-            "HYBRID CLOUD", "DOCKER", "KUBERNETES", "VIRTUAL MACHINE", "CYBERSECURITY", "DISASTER RECOVERY", "RPO", "RTO", 
-            "ITSM", "HELP DESK", "RMM", "CRM", "DATABASE", "DATA WAREHOUSE"
-        ]
-        
+        keywords = ["CPU", "GPU", "RAM", "SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "COMPUTER", "EVSE", "BATTERY"]
         results = []
-        for row in soup.find_all(['tr', 'li', 'a']):
+        
+        for row in soup.find_all('tr'):
             text = row.get_text().upper()
             if any(k in text for k in keywords):
-                link = row.find('a') if row.name != 'a' else row
-                if link:
+                cols = row.find_all('td')
+                link = row.find('a')
+                if link and len(cols) >= 2:
                     title = link.get_text(strip=True)
+                    # Attempt to find Commodity/Project info in nearby columns
+                    commodity = cols[2].get_text(strip=True) if len(cols) > 2 else "Technology Service"
                     href = urljoin(url, link.get('href', ''))
-                    results.append({"name": title if len(title) > 3 else "IT Solicitation", "url": href})
+                    results.append({"name": title, "commodity": commodity, "url": href})
         
-        return list({res['name']: res for res in results}.values())[:15]
-    except:
-        return []
+        return list({res['name']: res for res in results}.values())[:10]
+    except: return []
 
-def analyze_portal_item(name):
-    prompt = f"Analyze IT/Tech Bid: {name}. Provide vertical points for: 1. Goal, 2. Required Tech, 3. Legal/Compliance, 4. Award criteria."
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": "You are a Government Tech Analyst. Use '-' bullet points."},
-                     {"role": "user", "content": prompt}],
-        "temperature": 0.0
-    }
+def analyze_portal_page(page_url, bid_name):
+    """Goes INSIDE the link to perform a 'Bid Document' style analysis."""
     try:
-        r = requests.post(API_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload)
-        return r.json()['choices'][0]['message']['content']
-    except: return "Summary based on title. Upload PDF for full compliance scan."
+        r = requests.get(page_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        page_text = soup.get_text()[:15000] # Limit context for AI
+
+        prompt = f"Perform a deep analysis of this IT bid: {bid_name}. Based on the internal page text, list vertical points for: 1. Project Goals, 2. Required Software/Hardware, 3. Legal/Insurance, 4. How to Apply."
+        
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [{"role": "system", "content": "You are a Government IT Analyst. Use '-' bullets and simple words."},
+                         {"role": "user", "content": f"{prompt}\n\nPAGE TEXT:\n{page_text}"}],
+            "temperature": 0.0
+        }
+        r_ai = requests.post(API_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload)
+        return r_ai.json()['choices'][0]['message']['content']
+    except:
+        return "Internal page analysis failed. Please use 'Bid Document' tab to upload the PDF."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -157,7 +147,6 @@ if st.session_state.active_bid_text:
         st.info("### 📊 Contractor Guide: Service Performance")
         st.markdown(st.session_state.report_ans)
     else:
-        # Standard Bid Mode (Exactly as it was)
         if not st.session_state.agency_name:
             with st.status("Reading Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
@@ -202,16 +191,20 @@ else:
             clear_document_data()
             st.rerun()
     with tab3:
-        url_in = st.text_input("Enter any Government Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
-        if st.button("Scan Portal for IT & EV Bids"):
-            with st.spinner("Filtering opportunities based on master keyword list..."):
-                hits = master_portal_scanner(url_in)
+        url_in = st.text_input("Agency Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
+        if st.button("Deep Scan Portal"):
+            with st.spinner("Finding IT Bids & Project Details..."):
+                hits = deep_portal_scanner(url_in)
                 if hits:
-                    st.success(f"Found {len(hits)} opportunities:")
+                    st.success(f"Found {len(hits)} IT Opportunities:")
                     for bid in hits:
-                        with st.expander(f"🖥️ {bid['name']}"):
-                            st.write(f"[Source Listing]({bid['url']})")
+                        # Display Project Name + Commodity in the header
+                        with st.expander(f"🖥️ {bid['name']} | 📦 {bid['commodity']}"):
+                            st.write(f"[Open Official Bid Page]({bid['url']})")
                             st.write("---")
-                            st.markdown(analyze_portal_item(bid['name']))
+                            # Step 2: Go inside the URL to perform analysis
+                            with st.spinner("Analyzing sub-page content..."):
+                                analysis = analyze_portal_page(bid['url'], bid['name'])
+                                st.markdown(analysis)
                 else:
-                    st.warning("No matches found. Ensure the URL is public and contains active bids.")
+                    st.warning("No IT matches found. Ensure the portal contains text-based bid listings.")
