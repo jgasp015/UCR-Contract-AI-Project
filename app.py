@@ -3,7 +3,7 @@ import requests
 from pypdf import PdfReader
 from datetime import datetime
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 # --- 1. SESSION STATE (STRICTLY ISOLATED) ---
 def init_state():
@@ -83,48 +83,60 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: UNIVERSAL URL SCRAPER (THE NEW FIXED SECTION) ---
-def universal_portal_scraper(url):
-    """Scrapes any URL for IT-related bid links using a universal logic."""
+# --- 4. ENGINE C: MASTER KEYWORD PORTAL SCANNER (THE FIX) ---
+def master_portal_scanner(url):
+    """Universal scraper with a massive IT/EV keyword database."""
     try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Keywords for finding IT bids
-        it_keywords = ["SOFTWARE", "TECHNOLOGY", "NETWORK", "SAAS", "HARDWARE", "DATA", "IT ", "COMPUTER"]
+        # MASTER KEYWORD LIST
+        keywords = [
+            # Hardware
+            "CPU", "GPU", "RAM", "MOTHERBOARD", "CHIPSET", "SILICON CHIP", "SSD", "HDD", "NAS", "PRINTER", "SCANNER", 
+            "TOUCHSCREEN", "ROUTER", "SWITCH", "MODEM", "FIREWALL", "ACCESS POINT", "ETHERNET", "SERVER", "DATA CENTER", 
+            "RACK", "WEARABLES", "SMART GLASSES", "AR/VR", "QUANTUM", "IOT",
+            # Software
+            "AGILE", "SCRUM", "KANBAN", "DEVOPS", "CI/CD", "SDLC", "SOURCE CODE", "API ", "DEBUGGING", "JAVASCRIPT", 
+            "PYTHON", "OPEN SOURCE", "SAAS", "PAAS", "IAAS", "CMS", "OPERATING SYSTEM", "RANSOMWARE", "ENCRYPTION", 
+            "MALWARE", "DAST", "SAST", "VULNERABILITY", "AI ", "MACHINE LEARNING", "GENERATIVE AI", "BIG DATA", "BI ",
+            # Telecom
+            "5G ", "6G ", "FIBER", "BROADBAND", "WI-FI", "SATCOM", "V2X", "SD-WAN", "EDGE COMPUTING", "VOIP", "SMS", "RCS", 
+            "FWA", "ESIM", "DIRECT-TO-CELL", "UC ", "ISAC", "AGENTIC AI", "NTN",
+            # EV Tech
+            "BATTERY MANAGEMENT", "TRACTION MOTOR", "POWER INVERTER", "REGENERATIVE BRAKING", "EVSE", "CHARGING STATION", 
+            "V2V", "AUTONOMOUS", "ADAS", "TELEMATICS", "INFOTAINMENT", "OTA UPDATES",
+            # Cloud/Management
+            "HYBRID CLOUD", "DOCKER", "KUBERNETES", "VIRTUAL MACHINE", "CYBERSECURITY", "DISASTER RECOVERY", "RPO", "RTO", 
+            "ITSM", "HELP DESK", "RMM", "CRM", "DATABASE", "DATA WAREHOUSE"
+        ]
+        
         results = []
+        for row in soup.find_all(['tr', 'li', 'a']):
+            text = row.get_text().upper()
+            if any(k in text for k in keywords):
+                link = row.find('a') if row.name != 'a' else row
+                if link:
+                    title = link.get_text(strip=True)
+                    href = urljoin(url, link.get('href', ''))
+                    results.append({"name": title if len(title) > 3 else "IT Solicitation", "url": href})
         
-        for link in soup.find_all('a'):
-            link_text = link.get_text().strip()
-            href = link.get('href', '')
-            
-            # Resolve relative URLs to absolute URLs
-            if href and not href.startswith(('http', 'https')):
-                href = urljoin(url, href)
-                
-            if any(k in link_text.upper() for k in it_keywords):
-                results.append({"name": link_text, "url": href})
-        
-        # Deduplicate results by name
-        unique_results = {res['name']: res for res in results}.values()
-        return list(unique_results)[:15]
-    except Exception as e:
-        st.error(f"Error accessing URL: {e}")
+        return list({res['name']: res for res in results}.values())[:15]
+    except:
         return []
 
-def analyze_portal_selection(bid_name):
-    """AI analysis for portal-found items."""
-    prompt = f"Analyze this IT solicitation title: {bid_name}. List: 1. Goal, 2. Required Tech, 3. Legal/Conduct, 4. Award criteria."
+def analyze_portal_item(name):
+    prompt = f"Analyze IT/Tech Bid: {name}. Provide vertical points for: 1. Goal, 2. Required Tech, 3. Legal/Compliance, 4. Award criteria."
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": "You are a Government IT Analyst. Use short vertical points with '-'."},
+        "messages": [{"role": "system", "content": "You are a Government Tech Analyst. Use '-' bullet points."},
                      {"role": "user", "content": prompt}],
         "temperature": 0.0
     }
     try:
         r = requests.post(API_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload)
         return r.json()['choices'][0]['message']['content']
-    except: return "Deep scan requires a PDF upload."
+    except: return "Summary based on title. Upload PDF for full compliance scan."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -145,6 +157,7 @@ if st.session_state.active_bid_text:
         st.info("### 📊 Contractor Guide: Service Performance")
         st.markdown(st.session_state.report_ans)
     else:
+        # Standard Bid Mode (Exactly as it was)
         if not st.session_state.agency_name:
             with st.status("Reading Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
@@ -156,7 +169,7 @@ if st.session_state.active_bid_text:
         st.write(f"**{st.session_state.agency_name}**")
         st.divider()
         if not st.session_state.summary_ans:
-            with st.status("Gathering Facts..."):
+            with st.status("Gathering Specific Facts..."):
                 st.session_state.bid_details = bid_query(doc, "ID and Email only.")
                 st.session_state.summary_ans = bid_query(doc, "Project goals?")
                 st.session_state.tech_ans = bid_query(doc, "Software/Hardware needed?")
@@ -189,16 +202,16 @@ else:
             clear_document_data()
             st.rerun()
     with tab3:
-        url_input = st.text_input("Enter any Government Portal URL:", placeholder="https://agency.gov/bids")
-        if st.button("Scan URL for IT Bids"):
-            with st.spinner("Analyzing portal for technology opportunities..."):
-                results = universal_portal_scraper(url_input)
-                if results:
-                    st.success(f"Found {len(results)} IT-related items:")
-                    for bid in results:
+        url_in = st.text_input("Enter any Government Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
+        if st.button("Scan Portal for IT & EV Bids"):
+            with st.spinner("Filtering opportunities based on master keyword list..."):
+                hits = master_portal_scanner(url_in)
+                if hits:
+                    st.success(f"Found {len(hits)} opportunities:")
+                    for bid in hits:
                         with st.expander(f"🖥️ {bid['name']}"):
-                            st.write(f"[Source Link]({bid['url']})")
+                            st.write(f"[Source Listing]({bid['url']})")
                             st.write("---")
-                            st.markdown(analyze_portal_selection(bid['name']))
+                            st.markdown(analyze_portal_item(bid['name']))
                 else:
-                    st.warning("No IT-related bids detected. Ensure the URL is correct and public.")
+                    st.warning("No matches found. Ensure the URL is public and contains active bids.")
