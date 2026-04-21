@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import io
 import re
 
-# --- SILO 1: SESSION & STATE (UNTOUCHED & PERFECT) ---
+# --- SILO 1: SESSION & STATE (STRICTLY ISOLATED & PERMANENT) ---
 def init_state():
     keys = {
         'active_bid_text': None, 'analysis_mode': "Standard",
@@ -27,11 +27,10 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: AI ENGINES (UNTOUCHED & PERFECT) ---
+# --- SILO 2: AI ENGINES (MOM-TEST FOR BID, HIGH-CONTEXT FOR PERFORMANCE) ---
 def run_ai(text, prompt, system_msg, context_slice="full"):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     if context_slice == "start": ctx = text[:15000]
-    elif context_slice == "end": ctx = text[-18000:]
     else: ctx = text[:10000] + "\n[...]\n" + text[-10000:]
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -41,21 +40,23 @@ def run_ai(text, prompt, system_msg, context_slice="full"):
     r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
     return r.json()['choices'][0]['message']['content'].strip()
 
-# --- SILO 3: THE URL PORTAL ENGINE (RESTORED & FIXED) ---
+# --- SILO 3: THE FIXED AGENCY URL SCANNER (TRIPLE HANDSHAKE) ---
 def scrape_portal(url):
-    """Restored the human-mimic headers to bypass portal security."""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Referer': 'https://camisvr.co.la.ca.us/LACoBids/'
         }
-        # Step 1: Establish session cookies
-        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList", headers=headers)
-        # Step 2: Get the data
+        # Step 1: Hit root for cookies
+        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/", headers=headers, timeout=10)
+        # Step 2: Hit the search page
+        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList", headers=headers, timeout=10)
+        # Step 3: Get the actual requested URL
         r = st.session_state.portal_session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        it_k = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "MODEM", "SECURITY"]
+        it_k = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "MODEM", "SECURITY", "HARDWARE"]
         hits = []
         for row in soup.find_all('tr'):
             txt = row.get_text().upper()
@@ -66,7 +67,6 @@ def scrape_portal(url):
                     bid_num = link.get_text(strip=True)
                     id_match = re.search(r"\'(\d+)\'", link['href'])
                     bid_id = id_match.group(1) if id_match else ""
-                    
                     hits.append({
                         "id": bid_num, 
                         "desc": cols[1].get_text(strip=True).split("Commodity:")[0].strip(),
@@ -75,7 +75,7 @@ def scrape_portal(url):
         return hits
     except: return []
 
-# --- SILO 4: UI FLOW (UNTOUCHED ANALYSIS VIEWS) ---
+# --- SILO 4: UI FLOW ---
 if st.session_state.active_bid_text:
     if st.button("🏠 Home / Back"):
         st.session_state.active_bid_text = None
@@ -83,16 +83,17 @@ if st.session_state.active_bid_text:
     
     doc = st.session_state.active_bid_text
     if st.session_state.analysis_mode == "Reporting":
+        # PERFECT PERFORMANCE VIEW
         st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
             prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
-            st.session_state.report_ans = run_ai(doc, prompt, "SLA Compliance Officer. Detailed.", "full")
+            st.session_state.report_ans = run_ai(doc, prompt, "Contract Compliance Expert. High Detail.", "full")
         st.markdown(st.session_state.report_ans)
     else:
-        # PERFECT MOM-TEST BID VIEW (STAYS SAME)
+        # PERFECT MOM-TEST BID VIEW
         if not st.session_state.agency_name:
-            st.session_state.agency_name = run_ai(doc, "Agency?", "Name only.", "start")
-            st.session_state.project_title = run_ai(doc, "Project?", "Name only.", "start")
+            st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
+            st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
             st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
             st.rerun()
         st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
@@ -102,9 +103,9 @@ if st.session_state.active_bid_text:
         if not st.session_state.summary_ans:
             st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
             st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.", "full")
-            st.session_state.tech_ans = run_ai(doc, "Tools needed? Max 5 points.", "List items.", "full")
-            st.session_state.submission_ans = run_ai(doc, "Steps to apply?", "1, 2, 3.", "start")
-            st.session_state.compliance_ans = run_ai(doc, "Rules/Insurance?", "Mom-test points.", "full")
+            st.session_state.tech_ans = run_ai(doc, "Specific tools needed? Max 5 points.", "List items.", "full")
+            st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
+            st.session_state.compliance_ans = run_ai(doc, "Simple rules/Insurance?", "Mom-test points.", "full")
             st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.", "full")
             st.rerun()
 
@@ -123,24 +124,21 @@ else:
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; reset_analysis(); st.rerun()
-            
     with t_sla:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="m_sla")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; reset_analysis(); st.rerun()
-            
     with t_url:
         u_in = st.text_input("Agency URL:", value="", placeholder="Paste link here...")
         if st.button("Scan Portal for IT"):
             if u_in:
-                with st.spinner("Bypassing portal security..."):
+                with st.spinner("Establishing secure handshake..."):
                     st.session_state.portal_hits = scrape_portal(u_in)
-            else: st.warning("Enter a URL first.")
         
         if st.session_state.portal_hits:
             st.success(f"Found {len(st.session_state.portal_hits)} IT Opportunities:")
             for b in st.session_state.portal_hits:
                 with st.expander(f"🖥️ {b['desc']} ({b['id']})"):
                     st.link_button("Open Listing", b['url'])
-                    st.info("💡 Download the PDF from the portal and upload to 'Bid Document' tab.")
+                    st.info("💡 Download the PDF from the portal and upload it to the 'Bid Document' tab.")
