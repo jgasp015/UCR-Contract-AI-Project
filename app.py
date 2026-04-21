@@ -4,6 +4,7 @@ from pypdf import PdfReader
 from bs4 import BeautifulSoup
 import io
 import re
+import time # Added for stability
 
 # --- SILO 1: SESSION & STATE (STRICTLY ISOLATED & PERMANENT) ---
 def init_state():
@@ -27,20 +28,31 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: AI ENGINES (MOM-TEST FOR BID, HIGH-CONTEXT FOR PERFORMANCE) ---
+# --- SILO 2: FIXED AI ENGINE (ERROR-RESISTANT) ---
 def run_ai(text, prompt, system_msg, context_slice="full"):
+    time.sleep(0.5) # Prevents "Busy" errors by spacing out requests
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     if context_slice == "start": ctx = text[:15000]
     else: ctx = text[:10000] + "\n[...]\n" + text[-10000:]
+    
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}],
         "temperature": 0.0
     }
-    r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-    return r.json()['choices'][0]['message']['content'].strip()
+    
+    try:
+        r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        data = r.json()
+        # SAFE CHECK: Ensure the AI actually returned an answer
+        if "choices" in data and len(data["choices"]) > 0:
+            return data['choices'][0]['message']['content'].strip()
+        else:
+            return "⚠️ AI is busy. Please wait a moment and refresh."
+    except Exception as e:
+        return f"⚠️ Connection Error. Click 'Home' and try again."
 
-# --- SILO 3: THE FIXED AGENCY URL SCANNER (TRIPLE HANDSHAKE) ---
+# --- SILO 3: THE WORKING AGENCY URL SCANNER (UNTOUCHED) ---
 def scrape_portal(url):
     try:
         headers = {
@@ -48,11 +60,8 @@ def scrape_portal(url):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Referer': 'https://camisvr.co.la.ca.us/LACoBids/'
         }
-        # Step 1: Hit root for cookies
         st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/", headers=headers, timeout=10)
-        # Step 2: Hit the search page
         st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList", headers=headers, timeout=10)
-        # Step 3: Get the actual requested URL
         r = st.session_state.portal_session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
@@ -83,31 +92,34 @@ if st.session_state.active_bid_text:
     
     doc = st.session_state.active_bid_text
     if st.session_state.analysis_mode == "Reporting":
-        # PERFECT PERFORMANCE VIEW
         st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
-            prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
-            st.session_state.report_ans = run_ai(doc, prompt, "Contract Compliance Expert. High Detail.", "full")
+            with st.spinner("Analyzing Compliance..."):
+                prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
+                st.session_state.report_ans = run_ai(doc, prompt, "Contract Compliance Expert. High Detail.", "full")
         st.markdown(st.session_state.report_ans)
     else:
-        # PERFECT MOM-TEST BID VIEW
+        # MOM-TEST BID VIEW
         if not st.session_state.agency_name:
-            st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
-            st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
-            st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
-            st.rerun()
+            with st.status("Reading Bid Documents..."):
+                st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
+                st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
+                st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
+                st.rerun()
+        
         st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         
         if not st.session_state.summary_ans:
-            st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
-            st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.", "full")
-            st.session_state.tech_ans = run_ai(doc, "Specific tools needed? Max 5 points.", "List items.", "full")
-            st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
-            st.session_state.compliance_ans = run_ai(doc, "Simple rules/Insurance?", "Mom-test points.", "full")
-            st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.", "full")
-            st.rerun()
+            with st.status("Simplifying Requirements..."):
+                st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
+                st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.", "full")
+                st.session_state.tech_ans = run_ai(doc, "Specific tools needed? Max 5 points.", "List items.", "full")
+                st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
+                st.session_state.compliance_ans = run_ai(doc, "Simple rules/Insurance?", "Mom-test points.", "full")
+                st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.", "full")
+                st.rerun()
 
         tabs = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
         tabs[0].markdown(st.session_state.bid_details); tabs[1].info(st.session_state.summary_ans)
@@ -115,7 +127,6 @@ if st.session_state.active_bid_text:
         tabs[4].error(st.session_state.compliance_ans); tabs[5].write(st.session_state.award_ans)
 
 else:
-    # --- SILO 5: MAIN MENU (RESTORED URL SCANNER) ---
     st.title("🏛️ Public Sector Contract Analyzer")
     t_bid, t_sla, t_url = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
