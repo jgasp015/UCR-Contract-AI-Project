@@ -14,7 +14,8 @@ def init_state():
         'detected_due_date': None, 'summary_ans': None, 'tech_ans': None, 
         'submission_ans': None, 'compliance_ans': None, 'award_ans': None, 
         'bid_details': None, 'report_ans': None, 'total_saved': 0,
-        'portal_hits': []  # NEW: Keeps portal results alive between clicks
+        'portal_hits': [], # Persists the list of IT bids
+        'portal_session': requests.Session() # NEW: Keeps the government session alive
     }
     for k, v in keys.items():
         if k not in st.session_state: st.session_state[k] = v
@@ -79,57 +80,70 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: PORTAL DEEP-SCRAPER (FIXED PERSISTENCE) ---
+# --- 4. ENGINE C: PORTAL DEEP-SCANNER (FIXED SESSION LOGIC) ---
 def deep_portal_scanner(url):
+    """Initial scan that establishes a session to avoid server blocking."""
     try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Visit the main list page to establish session cookies
+        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/", headers=headers, timeout=10)
+        r = st.session_state.portal_session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
-        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "GPU"]
+        
+        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "GPU", "SECURITY"]
         results = []
         for row in soup.find_all('tr'):
             row_text = row.get_text().upper()
             if any(k in row_text for k in keywords):
                 cols = row.find_all('td')
-                link = row.find('a')
-                if link and len(cols) >= 2:
-                    solicitation = link.get_text(strip=True)
-                    full_title = cols[1].get_text(strip=True).replace(solicitation, "")
-                    commodity = "General IT"
-                    if "Commodity:" in full_title:
-                        parts = full_title.split("Commodity:")
-                        full_title = parts[0].strip()
-                        commodity = parts[1].strip()
-                    # FIXED URL: Force camisvr prefix for LA County
-                    final_url = urljoin("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/", link.get('href', ''))
+                link_tag = row.find('a', href=True)
+                if link_tag and len(cols) >= 2:
+                    solicitation = link_tag.get_text(strip=True)
+                    # Clean up the description
+                    raw_desc = cols[1].get_text(strip=True).replace(solicitation, "")
+                    description = raw_desc.split("Commodity:")[0].strip()
+                    commodity = raw_desc.split("Commodity:")[1].strip() if "Commodity:" in raw_desc else "IT Service"
+                    
                     results.append({
                         "name": solicitation,
-                        "description": full_title,
+                        "description": description,
                         "commodity": commodity,
-                        "url": final_url
+                        "url": urljoin("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/", link_tag.get('href', ''))
                     })
         return list({res['name']: res for res in results}.values())[:10]
     except: return []
 
 def analyze_portal_document(bid_url):
+    """Follows links deep into the portal to extract PDF text using the active session."""
     try:
-        r_page = requests.get(bid_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r_page = st.session_state.portal_session.get(bid_url, headers=headers, timeout=15)
         soup = BeautifulSoup(r_page.text, 'html.parser')
+        
         pdf_link = None
+        # Look for PDF download patterns common in government portals
         for a in soup.find_all('a', href=True):
             href = a['href'].lower()
-            if ".pdf" in href or "getattachment" in href or "download" in href:
+            if any(x in href for x in [".pdf", "getattachment", "download"]):
                 pdf_link = urljoin("https://camisvr.co.la.ca.us", a['href'])
                 break
-        if not pdf_link: return "No readable PDF found. Open the link manually."
-        r_pdf = requests.get(pdf_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=25)
+        
+        if not pdf_link:
+            return "No PDF found on the detail page. The portal may require manual download."
+
+        r_pdf = st.session_state.portal_session.get(pdf_link, headers=headers, timeout=30)
         pdf_file = io.BytesIO(r_pdf.content)
         reader = PdfReader(pdf_file)
-        full_text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        full_text = "".join([p.extract_text() for p in reader.pages if p.extract_text()])
+        
+        # Reuse your perfect analysis logic
         summary = bid_query(full_text, "What are the project goals?")
-        tech = bid_query(full_text, "What software and hardware is required?")
+        tech = bid_query(full_text, "What software/hardware is needed?")
         legal = bid_query(full_text, "What are the insurance and legal rules?")
+        
         return f"### 📖 Goals\n{summary}\n\n### 🛠️ Tech\n{tech}\n\n### ⚖️ Legal\n{legal}"
-    except: return "Document scan failed. The site may require a manual login/session."
+    except Exception as e:
+        return f"Error: {str(e)}. Please upload the document manually in the 'Bid Document' tab."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -145,6 +159,7 @@ if st.session_state.active_bid_text:
             st.rerun()
         st.info("### 📊 Contractor Guide: Service Performance"); st.markdown(st.session_state.report_ans)
     else:
+        # manual bid logic here (untouched)
         if not st.session_state.agency_name:
             st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
             st.session_state.project_title = bid_query(doc, "Project?", is_header=True)
@@ -162,35 +177,35 @@ if st.session_state.active_bid_text:
         t_legal.error(st.session_state.compliance_ans); t_award.write(st.session_state.award_ans)
 
 else:
-    tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
-    with tab1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf", key="main_bid_up")
+    t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
+    with t1:
+        up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; clear_document_data(); st.rerun()
-    with tab2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="main_cont_up")
+    with t2:
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; clear_document_data(); st.rerun()
-    with tab3:
+    with t3:
         url_in = st.text_input("Agency Portal URL:", value="", placeholder="Paste government bid URL here...")
         if st.button("Search for IT Bids"):
             if url_in:
-                with st.spinner("Finding IT opportunities..."):
+                with st.spinner("Establishing session and scanning portal..."):
                     st.session_state.portal_hits = deep_portal_scanner(url_in)
-            else: st.error("Please enter a URL.")
+            else: st.error("Enter a URL first.")
         
-        # PERSISTENT RESULTS: This block stays visible even after clicking an "Analyze" button
         if st.session_state.portal_hits:
             st.success(f"Found {len(st.session_state.portal_hits)} IT Opportunities:")
             for bid in st.session_state.portal_hits:
                 with st.expander(f"🖥️ {bid['description']} ({bid['name']})"):
-                    st.caption(f"📦 Commodity: {bid['commodity']}")
-                    # FIXED: Use st.link_button for reliable portal navigation
+                    st.caption(f"📦 {bid['commodity']}")
+                    # FIXED LINK: Direct button to open listing in new tab
                     st.link_button("Open Official Portal Listing", bid['url'])
                     st.divider()
-                    # FIXED: Added key to keep the button unique and functional
+                    # FIXED ANALYSIS: Key persistence ensures this doesn't clear the list
                     if st.button(f"Analyze {bid['name']}", key=f"btn_{bid['name']}"):
-                        with st.spinner("Analyzing document..."):
-                            st.markdown(analyze_portal_document(bid['url']))
+                        with st.spinner("Extracting and Analyzing Document..."):
+                            analysis = analyze_portal_document(bid['url'])
+                            st.markdown(analysis)
