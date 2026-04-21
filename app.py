@@ -3,7 +3,7 @@ import requests
 from pypdf import PdfReader
 import io
 
-# --- SILO 1: SESSION & STATE (RESTORED MAIN MENU ACCESS) ---
+# --- SILO 1: SESSION & STATE (STRICTLY ISOLATED) ---
 def init_state():
     keys = {
         'active_bid_text': None, 'analysis_mode': "Standard",
@@ -25,93 +25,82 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: AI ENGINE (MOM-TEST READY) ---
-def run_bid_ai(text, prompt, focus_area="general"):
+# --- SILO 2: AI ENGINES (CALIBRATED FOR DEPTH) ---
+def run_ai(text, prompt, system_msg, context_slice="full"):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Text slicing for unique Plan vs Apply content
-    if focus_area == "apply": context = text[:12000] 
-    elif focus_area == "goals": context = text[5000:22000] 
-    else: context = text[:15000]
+    # Context Slicing: Ensures the AI looks at the right parts of the doc
+    if context_slice == "start": ctx = text[:15000]
+    elif context_slice == "end": ctx = text[-18000:]
+    else: ctx = text[:10000] + "\n[...]\n" + text[-10000:]
 
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": "You use the Mom-Test: Simple words. No jargon. Vertical '-' bullets. Short and sweet."}, 
-                     {"role": "user", "content": f"{prompt}\n\nTEXT:\n{context}"}],
+        "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}],
         "temperature": 0.0
     }
     try:
         r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return r.json()['choices'][0]['message']['content'].strip()
-    except: return "Analysis unavailable."
+    except: return "Analysis failed. Please try again."
 
-# --- SILO 3: UI VIEW LOGIC ---
+# --- SILO 3: UI FLOW ---
 if st.session_state.active_bid_text:
-    # 🏠 BACK BUTTON (ALWAYS VISIBLE DURING ANALYSIS)
     if st.button("🏠 Home / Back"):
         st.session_state.active_bid_text = None
-        reset_analysis()
-        st.rerun()
+        reset_analysis(); st.rerun()
     
     doc = st.session_state.active_bid_text
 
     if st.session_state.analysis_mode == "Reporting":
-        # 📊 CONTRACT PERFORMANCE VIEW (FULL CONTEXT)
-        st.subheader("📊 Contractor Performance & Reporting Guide")
+        # 📊 CONTRACT PERFORMANCE: SLA, PENALTY, STOP-CLOCK
+        st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
-            st.session_state.report_ans = run_bid_ai(doc, "Explain exactly how to report issues and every report I must file monthly.")
+            with st.spinner("Scanning for Penalties & SLA..."):
+                prompt = """Explain: 1. HOW to report (Phone/Tool), 2. Uptime targets (%), 3. PENALTIES/Refunds for failure, 4. STOP-CLOCK conditions (when the timer stops), 5. Monthly reports required."""
+                st.session_state.report_ans = run_ai(doc, prompt, "SLA Compliance Officer. Be very detailed.", context_slice="full")
         st.markdown(st.session_state.report_ans)
     else:
-        # 📄 BID DOCUMENT VIEW (MOM-TEST)
+        # 📄 BID DOCUMENT: SIMPLIFIED ANALYSIS
         if not st.session_state.agency_name:
-            st.session_state.agency_name = run_bid_ai(doc, "Agency Name?")
-            st.session_state.project_title = run_bid_ai(doc, "Project Title?")
-            st.session_state.detected_due_date = run_bid_ai(doc, "Deadline Date?")
-            st.rerun()
+            with st.status("Reading..."):
+                st.session_state.agency_name = run_ai(doc, "Agency Name?", "Return ONLY the name.", "start")
+                st.session_state.project_title = run_ai(doc, "Project Name?", "Return ONLY the name.", "start")
+                st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
+                st.rerun()
         
         st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
 
         if not st.session_state.summary_ans:
-            st.session_state.bid_details = run_bid_ai(doc, "Solicitation ID and Contact Email.")
-            st.session_state.summary_ans = run_bid_ai(doc, "In simple words, what is the plan/goals?", focus_area="goals")
-            st.session_state.tech_ans = run_bid_ai(doc, "What specific tools or software are needed? Max 5 points.")
-            st.session_state.submission_ans = run_bid_ai(doc, "What are the exact steps to submit?", focus_area="apply")
-            st.session_state.compliance_ans = run_bid_ai(doc, "Rules for insurance or behavior?")
-            st.session_state.award_ans = run_bid_ai(doc, "How do they choose the winner?")
-            st.rerun()
+            with st.status("Analyzing Bid..."):
+                st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
+                st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.", "full")
+                st.session_state.tech_ans = run_ai(doc, "Software/Hardware needed?", "List items.", "full")
+                st.session_state.submission_ans = run_ai(doc, "Steps to apply?", "1, 2, 3.", "start")
+                st.session_state.compliance_ans = run_ai(doc, "Rules/Insurance?", "Mom-test points.", "full")
+                st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.", "full")
+                st.rerun()
 
         t1, t2, t3, t4, t5, t6 = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-        t1.markdown(st.session_state.bid_details)
-        t2.info(st.session_state.summary_ans)
-        t3.success(st.session_state.tech_ans)
-        t4.warning(st.session_state.submission_ans)
-        t5.error(st.session_state.compliance_ans)
-        t6.write(st.session_state.award_ans)
+        t1.markdown(st.session_state.bid_details); t2.info(st.session_state.summary_ans)
+        t3.success(st.session_state.tech_ans); t4.warning(st.session_state.submission_ans)
+        t5.error(st.session_state.compliance_ans); t6.write(st.session_state.award_ans)
 
 else:
-    # --- SILO 4: MAIN MENU (UPLOAD BUTTONS ARE HERE!) ---
     st.title("🏛️ Public Sector Contract Analyzer")
     t_bid, t_sla, t_url = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
-    
     with t_bid:
-        st.write("### 📄 Analyze a Bid PDF")
-        m_up = st.file_uploader("Upload Bid PDF", type="pdf", key="m_bid_up")
-        if m_up:
-            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(m_up).pages])
+        up = st.file_uploader("Upload Bid PDF", type="pdf", key="m_bid")
+        if up:
+            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; reset_analysis(); st.rerun()
-            
     with t_sla:
-        st.write("### 📊 Check SLA Reporting Rules")
-        s_up = st.file_uploader("Upload Contract PDF", type="pdf", key="m_sla_up")
-        if s_up:
-            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(s_up).pages])
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="m_sla")
+        if up_c:
+            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; reset_analysis(); st.rerun()
-            
     with t_url:
-        st.write("### 🔗 Scan Government Portal")
         u_in = st.text_input("Agency URL:", value="", placeholder="Paste link here...")
-        if st.button("Scan Portal for IT"):
-            # Portal scraper logic remains siloed here
-            pass
+        # (Scraper logic remains identically siloed)
