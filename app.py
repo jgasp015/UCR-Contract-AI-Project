@@ -1,11 +1,10 @@
 import streamlit as st
 import requests
 from pypdf import PdfReader
-from bs4 import BeautifulSoup
 import io
-import re
+import time  # NEW: For the retry pause
 
-# --- SILO 1: SESSION & STATE (STRICTLY ISOLATED) ---
+# --- SILO 1: SESSION & STATE ---
 def init_state():
     keys = {
         'active_bid_text': None, 'analysis_mode': "Standard",
@@ -27,7 +26,7 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: THE ERROR-PROOF AI ENGINE ---
+# --- SILO 2: SMART RETRY AI ENGINE ---
 def run_ai(text, prompt, system_msg, context_slice="full"):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:15000] if context_slice == "start" else text[:10000] + "\n[...]\n" + text[-10000:]
@@ -36,28 +35,32 @@ def run_ai(text, prompt, system_msg, context_slice="full"):
         "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}],
         "temperature": 0.0
     }
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        data = response.json()
-        # THE FIX: Safely check if the AI actually returned an answer
-        if "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0]["message"]["content"].strip()
-        else:
-            return "⚠️ The AI is busy or the API key is missing. Please try again in a moment."
-    except Exception as e:
-        return f"⚠️ Connection Error: {str(e)}"
+    
+    # NEW: Try 3 times before giving up
+    for attempt in range(3):
+        try:
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            if "choices" in data:
+                return data["choices"][0]["message"]["content"].strip()
+            elif "error" in data and "rate_limit" in str(data["error"]):
+                time.sleep(2) # Wait 2 seconds if throttled
+                continue
+        except:
+            time.sleep(1)
+            continue
+            
+    return "⚠️ AI is still busy. Please click 'Home' and try again in a few seconds."
 
-# --- SILO 3: UI FLOW (WITH BACK BUTTON) ---
+# --- SILO 3: UI FLOW ---
 if st.session_state.active_bid_text:
     if st.button("🏠 Home / Back"):
         st.session_state.active_bid_text = None
         reset_analysis(); st.rerun()
     
-    st.divider()
     doc = st.session_state.active_bid_text
 
     if st.session_state.analysis_mode == "Reporting":
-        # CONTRACT PERFORMANCE VIEW
         st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
             prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
@@ -85,12 +88,14 @@ if st.session_state.active_bid_text:
             st.rerun()
 
         tabs = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-        tabs[0].markdown(st.session_state.bid_details); tabs[1].info(st.session_state.summary_ans)
-        tabs[2].success(st.session_state.tech_ans); tabs[3].warning(st.session_state.submission_ans)
-        tabs[4].error(st.session_state.compliance_ans); tabs[5].write(st.session_state.award_ans)
+        tabs[0].markdown(st.session_state.bid_details)
+        tabs[1].info(st.session_state.summary_ans)
+        tabs[2].success(st.session_state.tech_ans)
+        tabs[3].warning(st.session_state.submission_ans)
+        tabs[4].error(st.session_state.compliance_ans)
+        tabs[5].write(st.session_state.award_ans)
 
 else:
-    # --- SILO 4: MAIN MENU ---
     st.title("🏛️ Public Sector Contract Analyzer")
     t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
@@ -107,5 +112,4 @@ else:
     with t3:
         u_in = st.text_input("Agency URL:", placeholder="Paste link here...")
         if st.button("Scan Portal for IT"):
-            # Simple scraper logic remains identically siloed
-            pass
+            pass # Scraper logic remains safe
