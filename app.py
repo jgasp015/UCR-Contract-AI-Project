@@ -42,17 +42,12 @@ def bid_query(full_text, specific_prompt, is_header=False):
     elif any(x in specific_prompt.lower() for x in ["rule", "legal", "insurance"]):
         context_text = full_text[2000:20000] 
     else: context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
-
-    system_content = """You are a Public Records Assistant. RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER. 4. START IMMEDIATELY with '-'."""
-    if is_header: system_content = "Return ONLY the name requested. No labels."
-
+    system_content = "You are a Public Records Assistant. RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER."
     payload = {"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": system_content}, {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{context_text}"}], "temperature": 0.0}
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
-        if is_header:
-            for skip in ["Agency:", "Project:", "Status:", "Deadline:", "- "]: res = res.replace(skip, "")
-            return res.split('\n')[0].strip()
+        if is_header: return res.split('\n')[0].strip()
         return format_vertical_list(res)
     except: return "N/A"
 
@@ -61,8 +56,7 @@ def reporting_query(full_text, specific_prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     start_point = int(len(full_text) * 0.5)
     context_text = full_text[start_point:] 
-    system_content = """You are a Compliance Assistant. Explain exactly HOW to report and WHAT to achieve. 
-    RULES: 1. HOW TO REPORT (TTRT/Phone). 2. SERVICE PROMISES (Premier %). 3. STOP CLOCK reasons. 4. MONTHLY REPORTS."""
+    system_content = "You are a Compliance Assistant. Explain HOW to report and SLA rules."
     payload = {"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": system_content}, {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{context_text}"}], "temperature": 0.0}
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
@@ -75,7 +69,7 @@ def format_vertical_list(text):
     seen = set()
     for line in lines:
         l = line.strip().lower()
-        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following"]): continue
+        if not l or any(x in l for x in ["hello", "neighbor", "here is"]): continue
         if l in seen: continue 
         display_line = line.strip()
         if not display_line.startswith("-"): display_line = f"- {display_line}"
@@ -83,50 +77,51 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: DEEP PORTAL ANALYZER (FIXED & EXPANDED) ---
+# --- 4. ENGINE C: PORTAL ENGINE (FIXED: BLANK URL & BETTER LISTING) ---
 def deep_portal_scanner(url):
-    """Scrapes for links + Commodity names from portal tables."""
+    """Targets Description and Commodity fields for IT keyword matches."""
     try:
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
-        
-        keywords = ["CPU", "GPU", "RAM", "SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "COMPUTER", "EVSE", "BATTERY"]
+        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "GPU"]
         results = []
         
         for row in soup.find_all('tr'):
-            text = row.get_text().upper()
-            if any(k in text for k in keywords):
+            row_text = row.get_text().upper()
+            if any(k in row_text for k in keywords):
                 cols = row.find_all('td')
                 link = row.find('a')
                 if link and len(cols) >= 2:
-                    title = link.get_text(strip=True)
-                    # Attempt to find Commodity/Project info in nearby columns
-                    commodity = cols[2].get_text(strip=True) if len(cols) > 2 else "Technology Service"
-                    href = urljoin(url, link.get('href', ''))
-                    results.append({"name": title, "commodity": commodity, "url": href})
-        
+                    # Capture the Solicitation Number
+                    solicitation = link.get_text(strip=True)
+                    # Capture the full Text/Description inside the 'Title' column
+                    full_title = cols[1].get_text(strip=True).replace(solicitation, "")
+                    # Extract Commodity specifically if it exists
+                    commodity = "General IT"
+                    if "Commodity:" in full_title:
+                        parts = full_title.split("Commodity:")
+                        full_title = parts[0].strip()
+                        commodity = parts[1].strip()
+                    
+                    results.append({
+                        "name": solicitation,
+                        "description": full_title,
+                        "commodity": commodity,
+                        "url": urljoin(url, link.get('href', ''))
+                    })
         return list({res['name']: res for res in results}.values())[:10]
     except: return []
 
 def analyze_portal_page(page_url, bid_name):
-    """Goes INSIDE the link to perform a 'Bid Document' style analysis."""
     try:
         r = requests.get(page_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
-        page_text = soup.get_text()[:15000] # Limit context for AI
-
-        prompt = f"Perform a deep analysis of this IT bid: {bid_name}. Based on the internal page text, list vertical points for: 1. Project Goals, 2. Required Software/Hardware, 3. Legal/Insurance, 4. How to Apply."
-        
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "system", "content": "You are a Government IT Analyst. Use '-' bullets and simple words."},
-                         {"role": "user", "content": f"{prompt}\n\nPAGE TEXT:\n{page_text}"}],
-            "temperature": 0.0
-        }
+        page_text = soup.get_text()[:15000]
+        prompt = f"Analyze IT bid {bid_name}. List: 1. Goals, 2. Required Tech, 3. Legal/Insurance, 4. Application Steps."
+        payload = {"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": "IT Analyst. Use '-' bullets."}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{page_text}"}], "temperature": 0.0}
         r_ai = requests.post(API_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload)
         return r_ai.json()['choices'][0]['message']['content']
-    except:
-        return "Internal page analysis failed. Please use 'Bid Document' tab to upload the PDF."
+    except: return "Deep analysis failed. Upload PDF manually."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -136,43 +131,34 @@ if st.session_state.active_bid_text:
         st.session_state.active_bid_text = None
         clear_document_data()
         st.rerun()
-
     doc = st.session_state.active_bid_text
-
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Scanning Compliance..."):
-                st.session_state.report_ans = reporting_query(doc, "Explain HOW to report, SLA targets, and Monthly Reports.")
-                st.rerun()
+            st.session_state.report_ans = reporting_query(doc, "Explain HOW to report, SLA targets, and Monthly Reports.")
+            st.rerun()
         st.info("### 📊 Contractor Guide: Service Performance")
         st.markdown(st.session_state.report_ans)
     else:
         if not st.session_state.agency_name:
-            with st.status("Reading Bid..."):
-                st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
-                st.session_state.project_title = bid_query(doc, "Project name?", is_header=True)
-                st.session_state.detected_due_date = bid_query(doc, "Deadline?", is_header=True)
-                st.rerun()
+            st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
+            st.session_state.project_title = bid_query(doc, "Project?", is_header=True)
+            st.session_state.detected_due_date = bid_query(doc, "Deadline?", is_header=True)
+            st.rerun()
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
         st.subheader(st.session_state.project_title)
         st.write(f"**{st.session_state.agency_name}**")
-        st.divider()
         if not st.session_state.summary_ans:
-            with st.status("Gathering Specific Facts..."):
-                st.session_state.bid_details = bid_query(doc, "ID and Email only.")
-                st.session_state.summary_ans = bid_query(doc, "Project goals?")
-                st.session_state.tech_ans = bid_query(doc, "Software/Hardware needed?")
-                st.session_state.submission_ans = bid_query(doc, "Apply steps.")
-                st.session_state.compliance_ans = bid_query(doc, "Insurance/Conduct.")
-                st.session_state.award_ans = bid_query(doc, "Winning criteria?")
-                st.rerun()
+            st.session_state.bid_details = bid_query(doc, "ID and Email.")
+            st.session_state.summary_ans = bid_query(doc, "Goals?")
+            st.session_state.tech_ans = bid_query(doc, "Tech?")
+            st.session_state.submission_ans = bid_query(doc, "Steps?")
+            st.session_state.compliance_ans = bid_query(doc, "Legal?")
+            st.session_state.award_ans = bid_query(doc, "Award?")
+            st.rerun()
         t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-        t_det.markdown(st.session_state.bid_details)
-        t_plan.info(st.session_state.summary_ans)
-        t_tech.success(st.session_state.tech_ans)
-        t_apply.warning(st.session_state.submission_ans)
-        t_legal.error(st.session_state.compliance_ans)
-        t_award.write(st.session_state.award_ans)
+        t_det.markdown(st.session_state.bid_details); t_plan.info(st.session_state.summary_ans)
+        t_tech.success(st.session_state.tech_ans); t_apply.warning(st.session_state.submission_ans)
+        t_legal.error(st.session_state.compliance_ans); t_award.write(st.session_state.award_ans)
 
 else:
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
@@ -180,31 +166,27 @@ else:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
-            st.session_state.analysis_mode = "Standard"
-            clear_document_data()
-            st.rerun()
+            st.session_state.analysis_mode = "Standard"; clear_document_data(); st.rerun()
     with tab2:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
-            st.session_state.analysis_mode = "Reporting"
-            clear_document_data()
-            st.rerun()
+            st.session_state.analysis_mode = "Reporting"; clear_document_data(); st.rerun()
     with tab3:
-        url_in = st.text_input("Agency Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
-        if st.button("Deep Scan Portal"):
-            with st.spinner("Finding IT Bids & Project Details..."):
-                hits = deep_portal_scanner(url_in)
-                if hits:
-                    st.success(f"Found {len(hits)} IT Opportunities:")
-                    for bid in hits:
-                        # Display Project Name + Commodity in the header
-                        with st.expander(f"🖥️ {bid['name']} | 📦 {bid['commodity']}"):
-                            st.write(f"[Open Official Bid Page]({bid['url']})")
-                            st.write("---")
-                            # Step 2: Go inside the URL to perform analysis
-                            with st.spinner("Analyzing sub-page content..."):
-                                analysis = analyze_portal_page(bid['url'], bid['name'])
-                                st.markdown(analysis)
-                else:
-                    st.warning("No IT matches found. Ensure the portal contains text-based bid listings.")
+        # FIXED: Blank URL bar by default
+        url_in = st.text_input("Agency Portal URL:", value="", placeholder="Paste government bid URL here...")
+        if st.button("Deep Scan Portal for IT"):
+            if url_in:
+                with st.spinner("Finding IT Opportunities..."):
+                    hits = deep_portal_scanner(url_in)
+                    if hits:
+                        for bid in hits:
+                            # FIXED: Show actual Name/Description in header
+                            with st.expander(f"🖥️ {bid['description']} ({bid['name']})"):
+                                st.caption(f"📦 Commodity: {bid['commodity']}")
+                                st.write(f"[Open Bid Source]({bid['url']})")
+                                st.divider()
+                                with st.spinner("Analyzing sub-page..."):
+                                    st.markdown(analyze_portal_page(bid['url'], bid['description']))
+                    else: st.warning("No IT matches found.")
+            else: st.error("Please enter a URL first.")
