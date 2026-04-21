@@ -4,7 +4,7 @@ import time
 from pypdf import PdfReader
 from bs4 import BeautifulSoup
 
-# --- 1. SESSION STATE ---
+# --- 1. SESSION STATE (JEFFREY GASPAR STYLE) ---
 def init_all_states():
     defaults = {
         'all_bids': [], 'active_bid_text': None, 'active_bid_name': None,
@@ -18,9 +18,9 @@ def init_all_states():
 
 init_all_states()
 
-# SAFE KEY LOADING
+# --- THE KEY HANDSHAKE ---
 if "GROQ_API_KEY" not in st.secrets:
-    st.error("🔑 Key missing in Streamlit Secrets! Please add it to the dashboard settings.")
+    st.error("🔑 KEY MISSING: Go to Streamlit Settings > Secrets and add GROQ_API_KEY")
     st.stop()
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
@@ -32,17 +32,22 @@ def deep_query(full_text, specific_prompt):
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
-            {"role": "system", "content": "Government Data Extractor. Concise facts. NO INTROS."},
+            {"role": "system", "content": "Government Data Extractor. Concise, simple points. NO INTROS."},
             {"role": "user", "content": f"{specific_prompt}\n\nTEXT:\n{full_text[:12000]}"}
         ],
         "temperature": 0.0 
     }
     try:
+        # Small delay to keep the connection stable
+        time.sleep(0.5)
         response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
-        return response.json()['choices'][0]['message']['content'].strip()
-    except: return "⚠️ Connection Error"
+        data = response.json()
+        if "choices" in data:
+            return data['choices'][0]['message']['content'].strip()
+        return "⚠️ AI Busy - Click again"
+    except: return "⚠️ Connection error"
 
-# --- 3. UI FLOW (RESTORED JEFFREY GASPAR STYLE) ---
+# --- 3. UI LOGIC ---
 st.title("🏛️ Public Sector Contract Analyzer")
 
 with st.sidebar:
@@ -60,11 +65,12 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
+    # STEP 1: INITIAL EXTRACTION
     if not st.session_state.agency_name:
-        with st.spinner("Analyzing Document..."):
-            st.session_state.agency_name = deep_query(doc, "Agency name?")
-            st.session_state.project_title = deep_query(doc, "Project title?")
-            st.session_state.detected_due_date = deep_query(doc, "Deadline? (MM/DD/YYYY).")
+        with st.spinner("Processing Document..."):
+            st.session_state.agency_name = deep_query(doc, "What is the Government Agency Name?")
+            st.session_state.project_title = deep_query(doc, "What is the Project Title?")
+            st.session_state.detected_due_date = deep_query(doc, "What is the Deadline? (MM/DD/YYYY)")
             st.session_state.status_flag = deep_query(doc, "Status: OPEN, CLOSED, or AWARDED?").upper()
             st.rerun()
 
@@ -76,14 +82,14 @@ if st.session_state.active_bid_text:
     st.markdown(f"### {st.session_state.agency_name}")
     st.markdown(f"**{st.session_state.project_title}**")
     
-    tabs = st.tabs(["📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
+    # STEP 2: TABS
+    tabs = st.tabs(["📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal"])
     if not st.session_state.summary_ans:
         with st.status("🚀 Deep Scanning..."):
             st.session_state.summary_ans = deep_query(doc, "Project goal.")
-            st.session_state.tech_ans = deep_query(doc, "Required gear.")
-            st.session_state.submission_ans = deep_query(doc, "Steps to apply.")
-            st.session_state.compliance_ans = deep_query(doc, "Insurance rules.")
-            st.session_state.award_ans = deep_query(doc, "Winner selection.")
+            st.session_state.tech_ans = deep_query(doc, "Tools/Gear needed.")
+            st.session_state.submission_ans = deep_query(doc, "How to apply.")
+            st.session_state.compliance_ans = deep_query(doc, "Legal/Insurance.")
             st.session_state.total_saved += 120
             st.rerun()
     
@@ -91,21 +97,15 @@ if st.session_state.active_bid_text:
     tabs[1].success(st.session_state.tech_ans)
     tabs[2].warning(st.session_state.submission_ans)
     tabs[3].error(st.session_state.compliance_ans)
-    tabs[4].write(st.session_state.award_ans)
 
 else:
-    t1, t2, t3 = st.tabs(["📄 Upload Bid", "📊 Contract Performance", "🔗 Scan Portal"])
+    # MAIN MENU
+    t1, t2 = st.tabs(["📄 Upload Bid", "🔗 Scan Portal"])
     with t1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up).pages])
-            st.session_state.analysis_mode = "Standard"; st.rerun()
+            st.rerun()
     with t2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf")
-        if up_c:
-            st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up_c).pages])
-            st.session_state.analysis_mode = "Reporting"; st.rerun()
-    with t3:
-        url = st.text_input("Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
-        if st.button("Scan"):
-            st.info("Scanner logic active. Please upload result PDF to analyze.")
+        url = st.text_input("Portal Link:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
+        st.write("Scanner active. Please upload result PDF to analyze.")
