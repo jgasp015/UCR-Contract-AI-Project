@@ -37,22 +37,21 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # --- 2. THE DUAL INDEPENDENT ENGINES ---
 
 def reporting_query(full_text, specific_prompt):
-    """CONTRACTOR COMPLIANCE ENGINE: Focuses on How to Report, SLA targets, and monthly duties."""
+    """COMPLIANCE ENGINE: Lists all SLAs, reporting steps, and specific penalties."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # Targeting the SLA and Business Requirements sections (back half of CALNET docs)
+    # Targeting the SLA section which contains the 'Meat' for contractors
     start_point = int(len(full_text) * 0.5)
     context_text = full_text[start_point:] 
 
-    system_content = """You are a Contract Compliance Expert helping a brand new government contractor.
-    Your goal is to explain exactly HOW to report and WHAT to do to stay compliant.
+    system_content = """You are a Contract Compliance Expert. Provide a clear guide for a new contractor.
     RULES:
-    1. HOW TO REPORT: Find 'Methods of Outage Reporting'. Explain using the Customer Service Center (phone) and the Trouble Ticket Reporting Tool (TTRT).
-    2. SERVICE PROMISES: List the Premier % for Uptime and minutes for CAT 2/3 and Excessive Outages.
-    3. PENALTIES: Explain that missing these requires giving the state a 'Credit' or 'Refund' automatically.
-    4. STOP CLOCKS: List the simple reasons they can 'pause the timer' (e.g. Building Access, End-User Request).
-    5. MONTHLY FILINGS: List the 3 reports they MUST send every month (Performance, Provisioning, and Credit reports).
-    6. SIMPLE CONTEXT: Use clear English for a person with limited knowledge. Start immediately with dash (-) points."""
+    1. LIST ALL SLA NAMES: You must find and list Availability, CAT 2, CAT 3, Contact Service Outage, Excessive Outage, Notification, and Provisioning.
+    2. WHAT QUALIFIES: Briefly define what triggers each SLA (e.g., 'total loss of service' or 'failure at one location').
+    3. HOW TO REPORT: State the specific tool (TTRT) and methods (Phone/Online) to open trouble tickets.
+    4. PENALTIES: State the specific 'Rights and Remedies' (e.g., 15%, 30%, 50%, or 100% TMRC credits).
+    5. NO GREETINGS: Start immediately with dash (-) points.
+    6. SIMPLE WORDS: Use 'Service Promise' instead of SLA where possible, but keep the technical names in bold."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -66,7 +65,7 @@ def reporting_query(full_text, specific_prompt):
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         res = response.json()['choices'][0]['message']['content'].strip()
         return format_vertical_list(res)
-    except: return "Analysis unavailable."
+    except: return "Compliance data unavailable. Please ensure the PDF includes Service Level Agreement (SLA) tables."
 
 def bid_query(full_text, specific_prompt, is_header=False):
     """THE PRESERVED BID ENGINE: Scanning start/end for accuracy - UNTOUCHED."""
@@ -81,15 +80,9 @@ def bid_query(full_text, specific_prompt, is_header=False):
     else:
         context_text = full_text[:8000] + "\n[...]\n" + full_text[-10000:]
 
-    system_content = """You are a Public Records Assistant. 
-    RULES:
-    1. MOM-TEST: 5-word lines. Simple words only.
-    2. NO REPEATING: Never say the same thing twice.
-    3. NO FILLER: No intros. Start with '-'.
-    4. ACCURACY: Look for 'Price Sheet' or 'Exhibit A' for software names."""
-
-    if is_header:
-        system_content = "Return ONLY the name requested. No labels."
+    system_content = """You are a Public Records Assistant. RULES: 1. MOM-TEST. 2. NO REPEATING. 3. NO FILLER. 4. START IMMEDIATELY with '-'."""
+    
+    if is_header: system_content = "Return ONLY the name requested. No labels."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -115,13 +108,13 @@ def format_vertical_list(text):
     seen = set()
     for line in lines:
         l = line.strip().lower()
-        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following"]): continue
+        if not l or any(x in l for x in ["hello", "neighbor", "here is", "following", "requested"]): continue
         if l in seen: continue 
         display_line = line.strip()
         if not display_line.startswith("-"): display_line = f"- {display_line}"
         clean_lines.append(display_line)
         seen.add(l)
-    return "\n\n".join(clean_lines[:15])
+    return "\n\n".join(clean_lines[:20]) # Expanded to allow for the long list of SLAs
 
 # --- 3. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -136,27 +129,27 @@ if st.session_state.active_bid_text:
 
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
-            with st.status("📊 Generating Contractor Operational Guide..."):
+            with st.status("📊 Building Contractor Compliance Guide..."):
                 prompt = """
-                Explain exactly how to report and stay compliant:
-                1. How to report a problem (Help Desk phone and TTRT Tool name).
-                2. Exact Uptime % and Fix Times (CAT 2/3 and Excessive Outage).
-                3. The rules for pausing the repair timer.
-                4. What reports must be sent every month.
+                As an operational guide for a new contractor, provide:
+                1. A full list of all SLA Names found (e.g. Availability, CAT 2, etc.).
+                2. What qualifies as an outage for each name.
+                3. Exact reporting instructions (Tool name and steps).
+                4. The specific penalty credits for missing the Premier goals.
                 """
                 st.session_state.report_ans = reporting_query(doc, prompt)
                 st.session_state.total_saved += 60
                 st.rerun()
-        st.info("### 📊 Active Contract: Service Performance & Reporting Guide")
+        st.info("### 📊 Contractor Guide: SLA Compliance & Reporting")
         st.markdown(st.session_state.report_ans)
 
     else:
-        # --- BID DOCUMENT VIEW (PERFECT LOGIC PRESERVED) ---
+        # --- BID DOCUMENT VIEW (REMAINS PERFECT) ---
         if not st.session_state.agency_name:
-            with st.status("Analyzing Bid..."):
+            with st.status("Analyzing Bid Document..."):
                 st.session_state.agency_name = bid_query(doc, "Agency name?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project title?", is_header=True)
-                raw_date = bid_query(doc, "Deadline date?", is_header=True)
+                raw_date = bid_query(doc, "Deadline MM/DD/YYYY?", is_header=True)
                 st.session_state.detected_due_date = raw_date
                 st.session_state.status_flag = "OPEN"
                 st.rerun()
@@ -167,13 +160,13 @@ if st.session_state.active_bid_text:
         st.divider()
 
         if not st.session_state.summary_ans:
-            with st.status("Gathering Specific Facts..."):
-                st.session_state.bid_details = bid_query(doc, "ID and Email only.")
-                st.session_state.summary_ans = bid_query(doc, "Project goals?")
-                st.session_state.tech_ans = bid_query(doc, "Software and gear needed.")
-                st.session_state.submission_ans = bid_query(doc, "3 steps to apply.")
+            with st.status("Extracting Bid Specifics..."):
+                st.session_state.bid_details = bid_query(doc, "Solicitation ID and Buyer Email.")
+                st.session_state.summary_ans = bid_query(doc, "4 main goals?")
+                st.session_state.tech_ans = bid_query(doc, "List software/gear needed.")
+                st.session_state.submission_ans = bid_query(doc, "3 simple steps to apply.")
                 st.session_state.compliance_ans = bid_query(doc, "Insurance and conduct rules.")
-                st.session_state.award_ans = bid_query(doc, "How they pick the winner?")
+                st.session_state.award_ans = bid_query(doc, "Winning criteria?")
                 st.rerun()
 
         t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
@@ -194,7 +187,7 @@ else:
             clear_document_data()
             st.rerun()
     with t2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
+        up_c = st.file_uploader("Upload SOW or Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
@@ -202,4 +195,4 @@ else:
             st.rerun()
     with t3:
         url_in = st.text_input("Agency URL:")
-        if st.button("Scan"): st.info("Requires driver.")
+        if st.button("Scan"): st.info("Requires local driver.")
