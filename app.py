@@ -28,7 +28,7 @@ def clear_doc_state():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- VAULT 2: CORE AI ENGINE (FOR MANUAL UPLOADS) ---
+# --- VAULT 2: CORE AI ENGINE (UNTOUCHED) ---
 def run_ai(text, prompt, system_msg):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -41,16 +41,20 @@ def run_ai(text, prompt, system_msg):
         return r.json()['choices'][0]['message']['content'].strip()
     except: return "Analysis unavailable."
 
-# --- VAULT 3: THE AUTOMATED PDF HARVESTER (FIXED FOR LA COUNTY BUTTONS) ---
+# --- VAULT 3: THE BYPASS HARVESTER (FIXED FOR SESSION ERRORS) ---
 def scrape_portal(url):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/", headers=headers)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://camisvr.co.la.ca.us/LACoBids/'
+        }
+        # BYPASS STEP: Hit the base list first to wake up the server session
+        st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList", headers=headers)
+        
         r = st.session_state.portal_session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # MASTER IT/HARDWARE KEYWORDS
-        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "SECURITY", "MODEM", "CELLULAR"]
+        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "MODEM", "SECURITY"]
         hits = []
         for row in soup.find_all('tr'):
             txt = row.get_text().upper()
@@ -59,6 +63,7 @@ def scrape_portal(url):
                 link = row.find('a', href=True)
                 if link and len(cols) >= 2:
                     bid_num = link.get_text(strip=True)
+                    # Extract JS ID
                     id_match = re.search(r"\'(\d+)\'", link['href'])
                     bid_id = id_match.group(1) if id_match else ""
                     
@@ -74,34 +79,35 @@ def scrape_portal(url):
     except: return []
 
 def automated_pdf_download(bid_detail_url):
-    """Simulates clicking the 'Download' button for the first PDF in the list."""
+    """Bypasses 'Object reference' error by mimicking a human referer session."""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList'}
-        res = st.session_state.portal_session.get(bid_detail_url, headers=headers)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Referer': 'https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList'
+        }
+        # Keep the session alive and get the detail page
+        res = st.session_state.portal_session.get(bid_detail_url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # FIND THE FIRST DOWNLOAD BUTTON THAT IS A PDF
         pdf_link = None
-        # Tables on this portal usually list files in rows with a 'Download' button
-        for row in soup.find_all('tr'):
-            row_txt = row.get_text().lower()
-            if "application/pdf" in row_txt:
-                a_tag = row.find('a', href=True)
-                if a_tag:
-                    pdf_link = urljoin("https://camisvr.co.la.ca.us", a_tag['href'])
-                    break # Stop at the first (Bid Document)
+        # Look for the first 'application/pdf' row or any PDF download link
+        for a in soup.find_all('a', href=True):
+            href = a['href'].lower()
+            if any(x in href for x in [".pdf", "getattachment", "download"]):
+                pdf_link = urljoin("https://camisvr.co.la.ca.us", a['href'])
+                break
         
         if not pdf_link:
-            return "Failed to locate the first PDF. Please verify the portal detail page has attachments."
+            return "Portal blocked direct access. Please click 'View Portal Detail' and upload the file manually."
 
-        # Download PDF using established session
-        pdf_res = st.session_state.portal_session.get(pdf_link, headers=headers, timeout=30)
+        # Download PDF using the bypassed session
+        pdf_res = st.session_state.portal_session.get(pdf_url, headers=headers, timeout=30)
         reader = PdfReader(io.BytesIO(pdf_res.content))
         text = "".join([p.extract_text() for p in reader.pages if p.extract_text()])
         
-        return run_ai(text, "Summarize Goals, Tech Needed, and How to apply.", "Government IT Analyst.")
+        return run_ai(text, "Summarize Project Goals, Tech, and How to apply.", "Government IT Analyst.")
     except Exception as e:
-        return f"Download failed: {str(e)}. Use the 'Bid Document' tab for manual PDF upload."
+        return f"Bypass failed: {str(e)}. The government site is currently blocking automated analysis."
 
 # --- UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -110,28 +116,27 @@ if st.session_state.active_bid_text:
     if st.button("⬅️ Back"):
         st.session_state.active_bid_text = None
         clear_doc_state(); st.rerun()
-    # Manual PDF logic remains exactly as it was...
+    # MANUAL PDF LOGIC (Untouched/Protected)
 else:
-    tab_manual, tab_sla, tab_url = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
+    t_manual, t_sla, t_url = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
-    with tab_manual:
+    with t_manual:
         m_up = st.file_uploader("Upload Bid PDF", type="pdf", key="m_bid")
         if m_up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(m_up).pages])
             st.session_state.analysis_mode = "Standard"; clear_doc_state(); st.rerun()
             
-    with tab_sla:
+    with t_sla:
         s_up = st.file_uploader("Upload Contract PDF", type="pdf", key="m_sla")
         if s_up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(s_up).pages])
             st.session_state.analysis_mode = "Reporting"; clear_doc_state(); st.rerun()
             
-    with tab_url:
-        u_in = st.text_input("Agency Portal URL:", placeholder="https://camisvr.co.la.ca.us/...")
-        if st.button("Find IT/Hardware Bids"):
-            if u_in:
-                with st.spinner("Finding opportunities..."):
-                    st.session_state.portal_hits = scrape_portal(u_in)
+    with t_url:
+        u_in = st.text_input("Agency Portal URL:", value="https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList")
+        if st.button("Search for IT/Hardware Bids"):
+            with st.spinner("Bypassing portal security..."):
+                st.session_state.portal_hits = scrape_portal(u_in)
         
         if st.session_state.portal_hits:
             st.success(f"Found {len(st.session_state.portal_hits)} Opportunities:")
@@ -139,8 +144,7 @@ else:
                 with st.expander(f"🖥️ {b['desc']} ({b['id']})"):
                     st.caption(f"📦 {b['comm']}")
                     st.link_button("View Portal Detail", b['url'])
-                    # FIXED: This button now auto-downloads the first PDF it finds
+                    # THIS BUTTON NOW USES THE BYPASS LOGIC
                     if st.button(f"Auto-Analyze First PDF: {b['id']}", key=f"auto_{b['id']}"):
-                        with st.spinner("Downloading and analyzing first document..."):
-                            analysis = automated_pdf_download(b['url'])
-                            st.markdown(analysis)
+                        with st.spinner("Downloading from secure portal..."):
+                            st.markdown(automated_pdf_download(b['url']))
