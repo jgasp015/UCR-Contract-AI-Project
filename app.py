@@ -78,13 +78,12 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: PORTAL DEEP-SCRAPER (FIXED FOR DOCUMENT PDFS) ---
+# --- 4. ENGINE C: PORTAL DEEP-SCRAPER (FIXED REDIRECTS & LINKS) ---
 def deep_portal_scanner(url):
     try:
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
-        # Use your comprehensive keyword list from earlier
-        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "SECURITY", "HARDWARE"]
+        keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "DATA", "CPU", "GPU"]
         results = []
         for row in soup.find_all('tr'):
             row_text = row.get_text().upper()
@@ -94,47 +93,53 @@ def deep_portal_scanner(url):
                 if link and len(cols) >= 2:
                     solicitation = link.get_text(strip=True)
                     full_title = cols[1].get_text(strip=True).replace(solicitation, "")
-                    commodity = "IT Opportunity"
+                    commodity = "General IT"
                     if "Commodity:" in full_title:
                         parts = full_title.split("Commodity:")
                         full_title = parts[0].strip()
                         commodity = parts[1].strip()
-                    results.append({"name": solicitation, "description": full_title, "commodity": commodity, "url": urljoin(url, link.get('href', ''))})
+                    results.append({
+                        "name": solicitation,
+                        "description": full_title,
+                        "commodity": commodity,
+                        "url": urljoin("https://camisvr.co.la.ca.us", link.get('href', ''))
+                    })
         return list({res['name']: res for res in results}.values())[:10]
     except: return []
 
 def analyze_portal_document(bid_url):
-    """Goes inside the bid URL, finds the PDF, and analyzes the actual document text."""
+    """FIXED: More aggressive PDF finding and error handling."""
     try:
-        # Step 1: Visit the bid detail page to find attachment links
-        r_page = requests.get(bid_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        r_page = requests.get(bid_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(r_page.text, 'html.parser')
         
-        # Step 2: Find links that end in .pdf or contain 'Attachment'
         pdf_link = None
+        # LA County often stores docs in specific attachment IDs or standard hrefs
         for a in soup.find_all('a', href=True):
-            if ".pdf" in a['href'].lower() or "download" in a['href'].lower():
-                pdf_link = urljoin(bid_url, a['href'])
+            href = a['href'].lower()
+            if ".pdf" in href or "getattachment" in href or "download" in href:
+                pdf_link = urljoin("https://camisvr.co.la.ca.us", a['href'])
                 break
         
         if not pdf_link:
-            return "No readable PDF found on the portal page. Try 'Bid Document' tab with a manual upload."
+            return "No readable PDF attachments found on this portal page. Please download the document and use the 'Bid Document' tab."
 
-        # Step 3: Download and Extract PDF text
-        r_pdf = requests.get(pdf_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
+        r_pdf = requests.get(pdf_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=25)
         pdf_file = io.BytesIO(r_pdf.content)
         reader = PdfReader(pdf_file)
-        full_text = "".join([page.extract_text() for page in reader.pages])
+        full_text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
 
-        # Step 4: Run the extracted text through the standard analysis logic
+        if len(full_text) < 100:
+            return "The PDF appears to be an image or protected. Manual upload in 'Bid Document' may be required."
+
+        # Standard Bid Logic Integration
         summary = bid_query(full_text, "What are the project goals?")
         tech = bid_query(full_text, "What software and hardware is required?")
         legal = bid_query(full_text, "What are the insurance and legal rules?")
-        apply = bid_query(full_text, "What are the 3 steps to apply?")
         
-        return f"### 📖 Project Goals\n{summary}\n\n### 🛠️ Tech Required\n{tech}\n\n### ⚖️ Legal & Insurance\n{legal}\n\n### 📝 How to Apply\n{apply}"
+        return f"### 📖 Project Goals\n{summary}\n\n### 🛠️ Tech Required\n{tech}\n\n### ⚖️ Legal & Insurance\n{legal}"
     except Exception as e:
-        return f"Document scraping failed: {str(e)}. The portal may be blocking automated PDF downloads."
+        return f"Portal PDF Access Error: {str(e)}. Use the 'Bid Document' tab for manual analysis."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -148,17 +153,14 @@ if st.session_state.active_bid_text:
         if not st.session_state.report_ans:
             st.session_state.report_ans = reporting_query(doc, "Explain HOW to report and SLA rules.")
             st.rerun()
-        st.info("### 📊 Contractor Guide: Service Performance")
-        st.markdown(st.session_state.report_ans)
+        st.info("### 📊 Contractor Guide: Service Performance"); st.markdown(st.session_state.report_ans)
     else:
         if not st.session_state.agency_name:
             st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
             st.session_state.project_title = bid_query(doc, "Project?", is_header=True)
             st.session_state.detected_due_date = bid_query(doc, "Deadline?", is_header=True)
             st.rerun()
-        st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
-        st.subheader(st.session_state.project_title)
-        st.write(f"**{st.session_state.agency_name}**")
+        st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}"); st.subheader(st.session_state.project_title); st.write(f"**{st.session_state.agency_name}**")
         if not st.session_state.summary_ans:
             st.session_state.bid_details = bid_query(doc, "ID and Email."); st.session_state.summary_ans = bid_query(doc, "Goals?")
             st.session_state.tech_ans = bid_query(doc, "Tech?"); st.session_state.submission_ans = bid_query(doc, "Steps?")
@@ -172,29 +174,31 @@ if st.session_state.active_bid_text:
 else:
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     with tab1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf", key="bid_up")
+        up = st.file_uploader("Upload Bid PDF", type="pdf", key="m_bid")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; clear_document_data(); st.rerun()
     with tab2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="cont_up")
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="m_cont")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; clear_document_data(); st.rerun()
     with tab3:
         url_in = st.text_input("Agency Portal URL:", value="", placeholder="Paste government bid URL here...")
-        if st.button("Deep Scan Portal for IT"):
+        if st.button("Search for IT Solicitations"):
             if url_in:
-                with st.spinner("Scraping IT Bids..."):
+                with st.spinner("Scraping Portal Content..."):
                     hits = deep_portal_scanner(url_in)
                     if hits:
                         for bid in hits:
                             with st.expander(f"🖥️ {bid['description']} ({bid['name']})"):
                                 st.caption(f"📦 {bid['commodity']}")
-                                st.write(f"[Open Official Portal Listing]({bid['url']})")
-                                # FIXED: This now triggers the PDF text extraction and analysis
-                                if st.button(f"Analyze Document for {bid['name']}", key=bid['name']):
-                                    with st.spinner("Extracting PDF and Analyzing..."):
-                                        analysis = analyze_portal_document(bid['url'])
-                                        st.markdown(analysis)
-                    else: st.warning("No IT matches found.")
+                                # FIXED LINK: Using st.link_button for reliable redirection
+                                st.link_button("Open Official Portal Listing", bid['url'])
+                                st.divider()
+                                # FIXED BUTTON: Proper key assignment to prevent click collisions
+                                if st.button(f"Analyze Attachment for {bid['name']}", key=f"btn_{bid['name']}"):
+                                    with st.spinner("Extracting PDF content from portal..."):
+                                        st.markdown(analyze_portal_document(bid['url']))
+                    else: st.warning("No IT matches found on this page.")
+            else: st.error("Please enter a portal URL.")
