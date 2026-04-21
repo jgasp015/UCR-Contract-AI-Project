@@ -81,10 +81,15 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: PORTAL DEEP-SCANNER (FIXED FOR JAVASCRIPT LINKS) ---
+# --- 4. ENGINE C: PORTAL DEEP-SCANNER (BYPASSING SESSION ERRORS) ---
 def deep_portal_scanner(url):
+    """Initial scan that establishes a persistent session and mimics a browser."""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+        }
+        # First visit to the base domain to get the 'Asp.Net' session cookie
         st.session_state.portal_session.get("https://camisvr.co.la.ca.us/LACoBids/", headers=headers, timeout=10)
         r = st.session_state.portal_session.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -100,58 +105,56 @@ def deep_portal_scanner(url):
                     solicitation = link_tag.get_text(strip=True)
                     raw_href = link_tag['href']
                     
-                    # FIX: Extract numerical ID from javascript:selectBid('12345')
+                    # Construct Detail URL
                     bid_id_match = re.search(r"\'(\d+)\'", raw_href)
-                    if bid_id_match:
-                        bid_id = bid_id_match.group(1)
-                        # Construct a real direct link to the Detail page
-                        final_url = f"https://camisvr.co.la.ca.us/LACoBids/BidLookUp/BidDetail?bidNumber={bid_id}"
-                    else:
-                        final_url = urljoin("https://camisvr.co.la.ca.us", raw_href)
+                    bid_id = bid_id_match.group(1) if bid_id_match else ""
+                    final_url = f"https://camisvr.co.la.ca.us/LACoBids/BidLookUp/BidDetail?bidNumber={bid_id}"
 
                     raw_desc = cols[1].get_text(strip=True).replace(solicitation, "")
                     description = raw_desc.split("Commodity:")[0].strip()
                     commodity = raw_desc.split("Commodity:")[1].strip() if "Commodity:" in raw_desc else "IT Service"
                     
-                    results.append({
-                        "name": solicitation,
-                        "description": description,
-                        "commodity": commodity,
-                        "url": final_url
-                    })
+                    results.append({"name": solicitation, "description": description, "commodity": commodity, "url": final_url})
         return list({res['name']: res for res in results}.values())[:10]
     except: return []
 
 def analyze_portal_document(bid_url):
-    """Bypasses JavaScript by targeting the attachment controller directly."""
+    """Bypasses the 'Object Reference' error by setting proper Referer headers."""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList'
+        }
+        # Get the detail page
         r_page = st.session_state.portal_session.get(bid_url, headers=headers, timeout=15)
         soup = BeautifulSoup(r_page.text, 'html.parser')
         
-        # In LA County, the real PDF is usually in the first download link on the detail page
+        # Look for PDF links on the detail page
         pdf_link = None
         for a in soup.find_all('a', href=True):
             href = a['href'].lower()
-            if any(x in href for x in [".pdf", "download", "attachment"]):
+            if any(x in href for x in [".pdf", "getattachment", "download"]):
                 pdf_link = urljoin("https://camisvr.co.la.ca.us", a['href'])
                 break
         
         if not pdf_link:
-            return "Could not find a direct PDF link. Please click 'Open Official Portal Listing' and upload the file manually."
+            return "No readable PDF found. The portal may require you to solve a CAPTCHA or Login manually."
 
+        # Download PDF using the same session
         r_pdf = st.session_state.portal_session.get(pdf_link, headers=headers, timeout=30)
         pdf_file = io.BytesIO(r_pdf.content)
         reader = PdfReader(pdf_file)
         full_text = "".join([p.extract_text() for p in reader.pages if p.extract_text()])
         
+        if len(full_text) < 100: return "PDF text is restricted or image-based. Please upload manually in 'Bid Document' tab."
+
         summary = bid_query(full_text, "What are the project goals?")
         tech = bid_query(full_text, "What software/hardware is needed?")
         legal = bid_query(full_text, "What are the insurance and legal rules?")
         
-        return f"### 📖 Goals\n{summary}\n\n### 🛠️ Tech\n{tech}\n\n### ⚖️ Legal\n{legal}"
+        return f"### 📖 Project Goals\n{summary}\n\n### 🛠️ Tech Required\n{tech}\n\n### ⚖️ Legal & Insurance\n{legal}"
     except Exception as e:
-        return f"Access Denied: {str(e)}. Portal requires a browser session. Use 'Bid Document' tab to upload manually."
+        return f"Access Blocked: {str(e)}. The government portal is protecting the file from automated scans."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -196,7 +199,7 @@ else:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; clear_document_data(); st.rerun()
     with t3:
-        url_in = st.text_input("Agency Portal URL:", value="", placeholder="Paste LA County or other portal link...")
+        url_in = st.text_input("Agency Portal URL:", value="", placeholder="Paste government bid URL...")
         if st.button("Search for IT Bids"):
             if url_in:
                 with st.spinner("Establishing secure session and scanning portal..."):
@@ -208,9 +211,10 @@ else:
             for bid in st.session_state.portal_hits:
                 with st.expander(f"🖥️ {bid['description']} ({bid['name']})"):
                     st.caption(f"📦 Commodity: {bid['commodity']}")
-                    st.link_button("Open Official Listing Page", bid['url'])
+                    # Using link_button for stable redirection
+                    st.link_button("Open Listing in New Tab", bid['url'])
                     st.divider()
                     if st.button(f"Deep Analyze {bid['name']}", key=f"btn_{bid['name']}"):
-                        with st.spinner("Accessing portal document and analyzing..."):
+                        with st.spinner("Scraping attached document..."):
                             analysis = analyze_portal_document(bid['url'])
                             st.markdown(analysis)
