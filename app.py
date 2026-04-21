@@ -4,7 +4,7 @@ from pypdf import PdfReader
 import io
 import re
 
-# --- 1. SESSION & STATE MANAGEMENT (PROTECTED) ---
+# --- 1. SESSION & STATE MANAGEMENT (ISOLATED) ---
 def init_state():
     keys = {
         'active_bid_text': None, 'analysis_mode': "Standard",
@@ -26,87 +26,83 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- 2. THE SIMPLIFIED ENGINE (THE "MOM TEST" FIX) ---
-def run_simplified_ai(text, prompt, system_msg):
-    """The fix: Forces the AI to use simple words, no jargon, and vertical points."""
+# --- 2. AI ENGINES (VAULTED SEPARATELY) ---
+def run_bid_ai(text, prompt):
+    """BID SILO: Mom-Test Simplification."""
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    
-    # Mom-Test System Prompt
-    mom_test = """You are a helpful assistant. Use the 'Mom Test': 
-    1. Use simple, everyday words. 2. No legal or IT jargon. 3. Short vertical bullet points starting with '-'. 
-    4. Be extremely direct. 5. If it's a date or name, return ONLY that."""
-    
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": mom_test}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text[:18000]}"}],
+        "messages": [{"role": "system", "content": "Helpful assistant. Use simple words. No jargon. Short vertical '-' bullets."}, 
+                     {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text[:18000]}"}],
         "temperature": 0.0
     }
-    try:
-        r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        return r.json()['choices'][0]['message']['content'].strip()
-    except: return "Analysis currently unavailable."
+    r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+    return r.json()['choices'][0]['message']['content'].strip()
 
-# --- 3. UI FLOW (BACK BUTTON + RESULTS VIEW) ---
+def run_performance_ai(text, prompt):
+    """PERFORMANCE SILO: High-context compliance logic for new contractors."""
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    system_msg = """You are a Contract Compliance Officer. Explain reporting duties for a NEW contractor.
+    Focus on: 1. HOW to report (Tools/Phone), 2. WHAT to achieve (SLA %), 3. RECOVERY times, 4. MONTHLY reports required."""
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [{"role": "system", "content": system_msg}, 
+                     {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text[len(text)//2:]}"}],
+        "temperature": 0.0
+    }
+    r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+    return r.json()['choices'][0]['message']['content'].strip()
+
+# --- 3. UI FLOW ---
 if st.session_state.active_bid_text:
     if st.button("🏠 Home / Back"):
         st.session_state.active_bid_text = None
-        reset_analysis()
-        st.rerun()
+        reset_analysis(); st.rerun()
     
     st.divider()
     doc = st.session_state.active_bid_text
 
     if st.session_state.analysis_mode == "Reporting":
-        # CONTRACT PERFORMANCE VIEW (UNTOUCHED LOGIC)
-        st.info("### 📊 Contract Reporting & SLA Guide")
+        # CONTRACT PERFORMANCE (DETAILED CONTEXT)
+        st.subheader("📊 Contractor Performance & Reporting Guide")
         if not st.session_state.report_ans:
-            st.session_state.report_ans = run_simplified_ai(doc, "How do I report problems and what are the monthly rules?", "Compliance Expert.")
+            with st.spinner("Analyzing Compliance Duties..."):
+                st.session_state.report_ans = run_performance_ai(doc, "Explain exactly how I report issues, the uptime targets, and every report I must file monthly.")
         st.markdown(st.session_state.report_ans)
     else:
-        # BID DOCUMENT VIEW (RE-SIMPLIFIED)
+        # BID DOCUMENT (MOM-TEST SIMPLIFIED)
         if not st.session_state.agency_name:
-            with st.status("Reading Bid..."):
-                st.session_state.agency_name = run_simplified_ai(doc, "What is the Agency name?", "Name only.")
-                st.session_state.project_title = run_simplified_ai(doc, "What is the Project name?", "Name only.")
-                st.session_state.detected_due_date = run_simplified_ai(doc, "What is the Deadline?", "Date only.")
-                st.rerun()
-        
-        st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
+            st.session_state.agency_name = run_bid_ai(doc, "Agency Name?")
+            st.session_state.project_title = run_bid_ai(doc, "Project Title?")
+            st.rerun()
         st.subheader(st.session_state.project_title)
-        st.write(f"**{st.session_state.agency_name}**")
-
+        st.info(f"**Agency:** {st.session_state.agency_name}")
+        
         if not st.session_state.summary_ans:
-            with st.status("Simplifying Facts..."):
-                st.session_state.bid_details = run_simplified_ai(doc, "What is the ID and the contact email?", "Facts only.")
-                st.session_state.summary_ans = run_simplified_ai(doc, "In simple words, what are the goals of this project?", "Simple points.")
-                st.session_state.tech_ans = run_simplified_ai(doc, "What software or hardware do they want?", "List items.")
-                st.session_state.submission_ans = run_simplified_ai(doc, "What are the simple steps to apply?", "1, 2, 3.")
-                st.session_state.compliance_ans = run_simplified_ai(doc, "What are the simple rules for insurance or behavior?", "Simple points.")
-                st.session_state.award_ans = run_simplified_ai(doc, "How do they pick the winner?", "Simple list.")
-                st.rerun()
-
-        t1, t2, t3, t4, t5, t6 = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
-        t1.markdown(st.session_state.bid_details); t2.info(st.session_state.summary_ans)
-        t3.success(st.session_state.tech_ans); t4.warning(st.session_state.submission_ans)
-        t5.error(st.session_state.compliance_ans); t6.write(st.session_state.award_ans)
+            st.session_state.summary_ans = run_bid_ai(doc, "Simple goals?")
+            st.session_state.tech_ans = run_bid_ai(doc, "Tech needed?")
+            st.rerun()
+        
+        t1, t2 = st.tabs(["📖 Plan", "🛠️ Tech"])
+        t1.write(st.session_state.summary_ans); t2.write(st.session_state.tech_ans)
 
 else:
-    # --- MAIN MENU (UNTOUCHED LOGIC FOR URL & PERFORMANCE) ---
+    # MAIN MENU (URL SECTION UNTOUCHED)
     st.title("🏛️ Public Sector Contract Analyzer")
     t_bid, t_sla, t_url = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
     with t_bid:
-        up = st.file_uploader("Upload Bid PDF", type="pdf", key="bid_vault")
+        up = st.file_uploader("Upload Bid PDF", type="pdf", key="v1")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; reset_analysis(); st.rerun()
             
     with t_sla:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="sla_vault")
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="v2")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; reset_analysis(); st.rerun()
-            
+    
     with t_url:
         u_in = st.text_input("Agency URL:", value="", placeholder="Paste link here...")
-        # Scraper logic remains as it was...
+        # Scraper logic remains as previously fixed
