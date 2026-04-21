@@ -1,104 +1,205 @@
 import streamlit as st
 import requests
-from pypdf import PdfReader
-import io
 import time
 
-# --- SILO 1: RECOVERY-FIRST STATE ---
-# This ensures that even if the app "blips," it remembers what it already found.
-def init_state():
-    keys = {
-        'active_bid_text': None, 'analysis_mode': "Standard",
-        'agency_name': None, 'project_title': None, 'detected_due_date': None,
-        'summary_ans': None, 'tech_ans': None, 'submission_ans': None,
-        'compliance_ans': None, 'award_ans': None, 'bid_details': None, 'report_ans': None
+# -----------------------------
+# 1. SESSION STATE SETUP
+# -----------------------------
+def init_vault():
+    defaults = {
+        "active_bid_text": None,
+        "agency_name": None,
+        "project_title": None,
+        "summary_ans": None,
+        "tech_ans": None,
+        "apply_ans": None,
+        "last_error": None,
     }
-    for k, v in keys.items():
-        if k not in st.session_state: st.session_state[k] = v
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-init_state()
+init_vault()
 
-def reset_analysis():
-    for k in ['agency_name', 'project_title', 'detected_due_date', 'summary_ans', 'tech_ans', 
-                'submission_ans', 'compliance_ans', 'award_ans', 'bid_details', 'report_ans']:
-        st.session_state[k] = None
+def hard_reset():
+    for key in [
+        "agency_name",
+        "project_title",
+        "summary_ans",
+        "tech_ans",
+        "apply_ans",
+        "last_error",
+    ]:
+        st.session_state[key] = None
 
+# -----------------------------
+# 2. API CONFIG
+# -----------------------------
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: THE "SLOW & STEADY" ENGINE ---
-def run_ai(text, prompt, system_msg):
-    # THE FIX: We wait 1.5 seconds between requests to ensure the AI doesn't block us
-    time.sleep(1.5) 
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+# -----------------------------
+# 3. AI CALL FUNCTION
+# -----------------------------
+def call_ai(text, prompt, max_chars=12000):
+    """Call Groq API with retries and visible error handling."""
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
     payload = {
         "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "system", "content": f"{system_msg} Use the Mom-Test: Simple words only."}, 
-                     {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text[:12000]}"}],
-        "temperature": 0.0
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use simple words. Mom-test style."
+            },
+            {
+                "role": "user",
+                "content": f"{prompt}\n\nTEXT:\n{text[:max_chars]}"
+            }
+        ],
+        "temperature": 0.0,
     }
-    try:
-        r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        res = r.json()
-        if "choices" in res:
-            return res['choices'][0]['message']['content'].strip()
-        return None
-    except:
-        return None
 
-# --- SILO 3: UI FLOW (THE "STEP-BY-STEP" LOADER) ---
-if st.session_state.active_bid_text:
-    if st.button("🏠 Home / Back"):
-        st.session_state.active_bid_text = None
-        reset_analysis()
-        st.rerun()
-    
-    doc = st.session_state.active_bid_text
+    last_err = None
 
-    # STEP 1: GET THE HEADER (ONLY IF WE DON'T HAVE IT)
-    if not st.session_state.agency_name:
-        with st.status("🏗️ Identifying Agency...") as s:
-            ans = run_ai(doc, "What is the Agency Name?", "Name only.")
-            if ans: 
-                st.session_state.agency_name = ans
-                st.rerun() # Refresh to show the result and move to next step
+    for attempt in range(3):
+        try:
+            time.sleep(1.2)
+            r = requests.post(API_URL, headers=headers, json=payload, timeout=25)
+            r.raise_for_status()
 
-    if not st.session_state.project_title:
-        with st.status("📄 Identifying Project...") as s:
-            ans = run_ai(doc, "What is the Project Name?", "Name only.")
-            if ans: 
-                st.session_state.project_title = ans
+            res = r.json()
+
+            if "choices" not in res or not res["choices"]:
+                last_err = f"No choices returned. Response: {res}"
+                continue
+
+            content = res["choices"][0]["message"]["content"].strip()
+
+            if len(content) > 5:
+                return content
+
+            last_err = "AI returned an empty or too-short response."
+
+        except requests.exceptions.RequestException as e:
+            last_err = f"HTTP/API error: {e}"
+        except ValueError as e:
+            last_err = f"JSON parse error: {e}"
+        except Exception as e:
+            last_err = f"Unexpected error: {e}"
+
+    st.session_state.last_error = last_err
+    return None
+
+# -----------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------
+def ensure_basic_fields(doc):
+    """Only fill agency/project once. No rerun needed."""
+    if st.session_state.agency_name is None:
+        with st.spinner("🔍 Locating Agency..."):
+            st.session_state.agency_name = call_ai(doc, "What is the Agency Name? Return only the agency name.")
+
+    if st.session_state.project_title is None:
+        with st.spinner("📄 Identifying Project..."):
+            st.session_state.project_title = call_ai(doc, "What is the Project Title? Return only the project title.")
+
+def generate_summary(doc):
+    if st.session_state.summary_ans is None:
+        with st.spinner("Simplifying plan..."):
+            st.session_state.summary_ans = call_ai(
+                doc,
+                "What are the project goals? Explain in simple words using short bullet points."
+            )
+
+def generate_tech(doc):
+    if st.session_state.tech_ans is None:
+        with st.spinner("Reviewing technical requirements..."):
+            st.session_state.tech_ans = call_ai(
+                doc,
+                "What are the technical requirements or important scope items? Use simple bullet points."
+            )
+
+def generate_apply(doc):
+    if st.session_state.apply_ans is None:
+        with st.spinner("Finding application requirements..."):
+            st.session_state.apply_ans = call_ai(
+                doc,
+                "What does the applicant need to submit or do to apply? Use a simple checklist."
+            )
+
+# -----------------------------
+# 5. DEMO INPUT IF NO DOC LOADED
+# -----------------------------
+st.title("Bid Analyzer")
+
+if st.session_state.active_bid_text is None:
+    st.info("Paste bid text below to test.")
+    sample_text = st.text_area("Bid / RFP Text", height=250)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Analyze"):
+            if sample_text.strip():
+                st.session_state.active_bid_text = sample_text.strip()
+                hard_reset()
                 st.rerun()
+            else:
+                st.warning("Please paste bid text first.")
 
-    # DISPLAY WHAT WE HAVE SO FAR
-    st.success(f"● BID LOADED")
-    st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
-    st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
-
-    # STEP 2: LOAD TABS ONE BY ONE
-    tabs = st.tabs(["📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal"])
-    
-    with tabs[0]: # Plan Tab
-        if not st.session_state.summary_ans:
-            with st.spinner("Writing Plan..."):
-                ans = run_ai(doc, "What are the goals? (Simple words)", "Mom-test.")
-                if ans: st.session_state.summary_ans = ans; st.rerun()
-        st.info(st.session_state.summary_ans)
-
-    with tabs[1]: # Tech Tab
-        if not st.session_state.tech_ans:
-            with st.spinner("Listing Tech..."):
-                ans = run_ai(doc, "What software/hardware is needed? Max 5.", "List items.")
-                if ans: st.session_state.tech_ans = ans; st.rerun()
-        st.success(st.session_state.tech_ans)
+    with col2:
+        if st.button("Clear"):
+            st.session_state.active_bid_text = None
+            hard_reset()
+            st.rerun()
 
 else:
-    # --- MAIN MENU (STAYS UNTOUCHED) ---
-    st.title("🏛️ Public Sector Contract Analyzer")
-    t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
+    # -----------------------------
+    # 6. MAIN ANALYSIS VIEW
+    # -----------------------------
+    if st.button("🏠 Exit Analysis"):
+        st.session_state.active_bid_text = None
+        hard_reset()
+        st.rerun()
+
+    doc = st.session_state.active_bid_text
+
+    ensure_basic_fields(doc)
+
+    if st.session_state.agency_name or st.session_state.project_title:
+        st.success("✅ ANALYSIS READY")
+        st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name or 'Not found'}")
+        st.write(f"**📄 BID:** {st.session_state.project_title or 'Not found'}")
+
+    if st.session_state.last_error:
+        st.error(f"Last API error: {st.session_state.last_error}")
+
+    t1, t2, t3 = st.tabs(["📖 Plan", "🛠️ Tech", "📝 Apply"])
+
     with t1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf")
-        if up:
-            st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
-            st.session_state.analysis_mode = "Standard"; reset_analysis(); st.rerun()
-    # (Rest of menu logic remains identically protected)
+        if st.session_state.summary_ans is None:
+            if st.button("Generate Plan Summary"):
+                generate_summary(doc)
+
+        if st.session_state.summary_ans:
+            st.markdown(st.session_state.summary_ans)
+
+    with t2:
+        if st.session_state.tech_ans is None:
+            if st.button("Generate Tech Review"):
+                generate_tech(doc)
+
+        if st.session_state.tech_ans:
+            st.markdown(st.session_state.tech_ans)
+
+    with t3:
+        if st.session_state.apply_ans is None:
+            if st.button("Generate Apply Checklist"):
+                generate_apply(doc)
+
+        if st.session_state.apply_ans:
+            st.markdown(st.session_state.apply_ans)
