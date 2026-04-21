@@ -3,7 +3,7 @@ import requests
 from pypdf import PdfReader
 from datetime import datetime
 from bs4 import BeautifulSoup
-import pandas as pd
+from urllib.parse import urljoin, urlparse
 
 # --- 1. SESSION STATE (STRICTLY ISOLATED) ---
 def init_state():
@@ -83,46 +83,48 @@ def format_vertical_list(text):
         seen.add(l)
     return "\n\n".join(clean_lines[:15])
 
-# --- 4. ENGINE C: PORTAL SCRAPER (REBUILT FOR IT BIDS) ---
-def get_it_bids():
-    """Directly targets IT bids by analyzing the portal's data structure."""
-    url = "https://camisvr.co.la.ca.us/LACoBids/BidLookUp/OpenBidList"
+# --- 4. ENGINE C: UNIVERSAL URL SCRAPER (THE NEW FIXED SECTION) ---
+def universal_portal_scraper(url):
+    """Scrapes any URL for IT-related bid links using a universal logic."""
     try:
-        # LA County often blocks standard requests, we use a desktop-header
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        it_keywords = ["SOFTWARE", "IT ", "TECHNOLOGY", "NETWORK", "SAAS", "HARDWARE", "COMPUTER", "DATA"]
-        bids = []
+        # Keywords for finding IT bids
+        it_keywords = ["SOFTWARE", "TECHNOLOGY", "NETWORK", "SAAS", "HARDWARE", "DATA", "IT ", "COMPUTER"]
+        results = []
         
-        # Searching specifically for table rows which usually hold the data
-        rows = soup.find_all('tr')
-        for row in rows:
-            text = row.get_text().upper()
-            if any(k in text for k in it_keywords):
-                cols = row.find_all('td')
-                if len(cols) >= 2:
-                    name = cols[1].get_text(strip=True)
-                    link = cols[1].find('a')['href'] if cols[1].find('a') else "#"
-                    bids.append({"name": name, "url": f"https://camisvr.co.la.ca.us{link}"})
-        return bids[:10]
-    except:
-        return [{"name": "0014 SOFTWARE SAAS PROJECT MANAGEMENT", "url": "https://camisvr.co.la.ca.us/LACoBids/"}, 
-                {"name": "IT NETWORK INFRASTRUCTURE UPGRADE", "url": "https://camisvr.co.la.ca.us/LACoBids/"}]
+        for link in soup.find_all('a'):
+            link_text = link.get_text().strip()
+            href = link.get('href', '')
+            
+            # Resolve relative URLs to absolute URLs
+            if href and not href.startswith(('http', 'https')):
+                href = urljoin(url, href)
+                
+            if any(k in link_text.upper() for k in it_keywords):
+                results.append({"name": link_text, "url": href})
+        
+        # Deduplicate results by name
+        unique_results = {res['name']: res for res in results}.values()
+        return list(unique_results)[:15]
+    except Exception as e:
+        st.error(f"Error accessing URL: {e}")
+        return []
 
-def portal_ai_analysis(bid_name):
-    """Provides the multi-tab analysis for Portal items."""
-    prompt = f"Analyze this IT Bid: {bid_name}. Provide: 1. OVERVIEW, 2. TECH NEEDS, 3. LEGAL/INSURANCE, 4. AWARD CRITERIA."
+def analyze_portal_selection(bid_name):
+    """AI analysis for portal-found items."""
+    prompt = f"Analyze this IT solicitation title: {bid_name}. List: 1. Goal, 2. Required Tech, 3. Legal/Conduct, 4. Award criteria."
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "system", "content": "You are a Government Bid Analyst. List short, specific points for an IT contractor."},
+        "messages": [{"role": "system", "content": "You are a Government IT Analyst. Use short vertical points with '-'."},
                      {"role": "user", "content": prompt}],
         "temperature": 0.0
     }
     try:
         r = requests.post(API_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload)
         return r.json()['choices'][0]['message']['content']
-    except: return "Detailed analysis available upon PDF upload."
+    except: return "Deep scan requires a PDF upload."
 
 # --- 5. UI LAYOUT ---
 st.title("🏛️ Public Sector Contract Analyzer")
@@ -138,27 +140,23 @@ if st.session_state.active_bid_text:
     if st.session_state.analysis_mode == "Reporting":
         if not st.session_state.report_ans:
             with st.status("📊 Scanning Compliance..."):
-                prompt = "Explain HOW to report, SLA targets (Premier), and Monthly Reports."
-                st.session_state.report_ans = reporting_query(doc, prompt)
+                st.session_state.report_ans = reporting_query(doc, "Explain HOW to report, SLA targets, and Monthly Reports.")
                 st.rerun()
         st.info("### 📊 Contractor Guide: Service Performance")
         st.markdown(st.session_state.report_ans)
     else:
-        # Standard Bid Mode (Exactly as you like it)
         if not st.session_state.agency_name:
             with st.status("Reading Bid..."):
                 st.session_state.agency_name = bid_query(doc, "Agency?", is_header=True)
                 st.session_state.project_title = bid_query(doc, "Project name?", is_header=True)
                 st.session_state.detected_due_date = bid_query(doc, "Deadline?", is_header=True)
                 st.rerun()
-
         st.success(f"● OPEN | Deadline: {st.session_state.detected_due_date}")
         st.subheader(st.session_state.project_title)
         st.write(f"**{st.session_state.agency_name}**")
         st.divider()
-
         if not st.session_state.summary_ans:
-            with st.status("Gathering Specific Facts..."):
+            with st.status("Gathering Facts..."):
                 st.session_state.bid_details = bid_query(doc, "ID and Email only.")
                 st.session_state.summary_ans = bid_query(doc, "Project goals?")
                 st.session_state.tech_ans = bid_query(doc, "Software/Hardware needed?")
@@ -166,7 +164,6 @@ if st.session_state.active_bid_text:
                 st.session_state.compliance_ans = bid_query(doc, "Insurance/Conduct.")
                 st.session_state.award_ans = bid_query(doc, "Winning criteria?")
                 st.rerun()
-
         t_det, t_plan, t_tech, t_apply, t_legal, t_award = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
         t_det.markdown(st.session_state.bid_details)
         t_plan.info(st.session_state.summary_ans)
@@ -178,27 +175,30 @@ if st.session_state.active_bid_text:
 else:
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     with tab1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
+        up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"
             clear_document_data()
             st.rerun()
     with tab2:
-        up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
+        up_c = st.file_uploader("Upload Contract PDF", type="pdf")
         if up_c:
             st.session_state.active_bid_text = "".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"
             clear_document_data()
             st.rerun()
     with tab3:
-        st.write("Scans LA County for active IT opportunities.")
-        if st.button("Find IT Bids"):
-            with st.spinner("Scraping Portal..."):
-                results = get_it_bids()
-                for bid in results:
-                    with st.expander(f"🖥️ {bid['name']}"):
-                        st.write(f"[View Official Listing]({bid['url']})")
-                        st.write("---")
-                        # Detailed Analysis for each portal item
-                        st.markdown(portal_ai_analysis(bid['name']))
+        url_input = st.text_input("Enter any Government Portal URL:", placeholder="https://agency.gov/bids")
+        if st.button("Scan URL for IT Bids"):
+            with st.spinner("Analyzing portal for technology opportunities..."):
+                results = universal_portal_scraper(url_input)
+                if results:
+                    st.success(f"Found {len(results)} IT-related items:")
+                    for bid in results:
+                        with st.expander(f"🖥️ {bid['name']}"):
+                            st.write(f"[Source Link]({bid['url']})")
+                            st.write("---")
+                            st.markdown(analyze_portal_selection(bid['name']))
+                else:
+                    st.warning("No IT-related bids detected. Ensure the URL is correct and public.")
