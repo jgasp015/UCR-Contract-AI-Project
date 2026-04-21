@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import requests
 from pypdf import PdfReader
@@ -37,7 +36,6 @@ def reset_analysis():
     ]:
         st.session_state[k] = None
 
-# 🔥 STOP APP IF NO API KEY
 if "GROQ_API_KEY" not in st.secrets:
     st.error("❌ GROQ_API_KEY missing. Go to Streamlit → Settings → Secrets")
     st.stop()
@@ -126,7 +124,6 @@ if st.session_state.active_bid_text:
 
     doc = st.session_state.active_bid_text
 
-    # HEADER LOAD
     if st.session_state.agency_name is None:
         st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
         st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
@@ -137,7 +134,6 @@ if st.session_state.active_bid_text:
     st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
     st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
 
-    # MAIN ANALYSIS
     if st.session_state.summary_ans is None:
         st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
         st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.")
@@ -170,4 +166,3 @@ else:
             st.rerun()
         else:
             st.error("⚠️ Could not extract text from PDF")
-```
