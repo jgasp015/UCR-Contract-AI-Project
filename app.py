@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 from pypdf import PdfReader
 import io
-import time  # NEW: For the retry pause
+import time # FOR STAGGERED LOADING
 
 # --- SILO 1: SESSION & STATE ---
 def init_state():
@@ -26,8 +26,9 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: SMART RETRY AI ENGINE ---
+# --- SILO 2: STAGGERED AI ENGINE (PREVENTS "BUSY" ERROR) ---
 def run_ai(text, prompt, system_msg, context_slice="full"):
+    time.sleep(0.5) # STAGGER: Small pause to prevent hitting rate limits
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:15000] if context_slice == "start" else text[:10000] + "\n[...]\n" + text[-10000:]
     payload = {
@@ -35,22 +36,14 @@ def run_ai(text, prompt, system_msg, context_slice="full"):
         "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}],
         "temperature": 0.0
     }
-    
-    # NEW: Try 3 times before giving up
-    for attempt in range(3):
-        try:
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-            data = response.json()
-            if "choices" in data:
-                return data["choices"][0]["message"]["content"].strip()
-            elif "error" in data and "rate_limit" in str(data["error"]):
-                time.sleep(2) # Wait 2 seconds if throttled
-                continue
-        except:
-            time.sleep(1)
-            continue
-            
-    return "⚠️ AI is still busy. Please click 'Home' and try again in a few seconds."
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        data = response.json()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"].strip()
+        return "⚠️ Still loading... please wait a moment."
+    except:
+        return "⚠️ Connection slow. Try again."
 
 # --- SILO 3: UI FLOW ---
 if st.session_state.active_bid_text:
@@ -61,31 +54,34 @@ if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
     if st.session_state.analysis_mode == "Reporting":
+        # 📊 CONTRACT PERFORMANCE VIEW
         st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
-            prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
-            st.session_state.report_ans = run_ai(doc, prompt, "Contract Compliance Expert. High Detail.")
+            with st.spinner("Analyzing SLA Rules..."):
+                st.session_state.report_ans = run_ai(doc, "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports.", "Compliance Officer.")
         st.markdown(st.session_state.report_ans)
     else:
-        # MOM-TEST BID VIEW
+        # 📄 BID DOCUMENT VIEW (MOM-TEST)
         if not st.session_state.agency_name:
-            st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
-            st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
-            st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
-            st.rerun()
+            with st.status("Reading Bid Info..."):
+                st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
+                st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
+                st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
+                st.rerun()
         
         st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         
         if not st.session_state.summary_ans:
-            st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
-            st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.")
-            st.session_state.tech_ans = run_ai(doc, "Tools needed? Max 5 points.", "List items.")
-            st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
-            st.session_state.compliance_ans = run_ai(doc, "Rules/Insurance?", "Mom-test points.")
-            st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.")
-            st.rerun()
+            with st.status("Simplifying Tabs..."):
+                st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
+                st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.")
+                st.session_state.tech_ans = run_ai(doc, "Tools needed? Max 5 points.", "List items.")
+                st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
+                st.session_state.compliance_ans = run_ai(doc, "Rules/Insurance?", "Mom-test points.")
+                st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.")
+                st.rerun()
 
         tabs = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
         tabs[0].markdown(st.session_state.bid_details)
@@ -96,6 +92,7 @@ if st.session_state.active_bid_text:
         tabs[5].write(st.session_state.award_ans)
 
 else:
+    # --- SILO 4: MAIN MENU ---
     st.title("🏛️ Public Sector Contract Analyzer")
     t1, t2, t3 = st.tabs(["📄 Bid Document", "📊 Contract Performance", "🔗 Agency URL"])
     
@@ -112,4 +109,4 @@ else:
     with t3:
         u_in = st.text_input("Agency URL:", placeholder="Paste link here...")
         if st.button("Scan Portal for IT"):
-            pass # Scraper logic remains safe
+            pass
