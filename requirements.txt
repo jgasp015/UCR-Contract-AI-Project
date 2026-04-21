@@ -2,4 +2,3 @@ streamlit
 requests
 pypdf
 beautifulsoup4
-selenium
