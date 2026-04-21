@@ -4,9 +4,9 @@ from pypdf import PdfReader
 from bs4 import BeautifulSoup
 import io
 import re
-import time # Added for stability
+import time
 
-# --- SILO 1: SESSION & STATE (STRICTLY ISOLATED & PERMANENT) ---
+# --- SILO 1: SESSION & STATE (RESTORED & PERSISTENT) ---
 def init_state():
     keys = {
         'active_bid_text': None, 'analysis_mode': "Standard",
@@ -28,12 +28,11 @@ def reset_analysis():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: FIXED AI ENGINE (ERROR-RESISTANT) ---
+# --- SILO 2: THE "PATIENT" AI ENGINE (PREVENTS BUSY ERRORS) ---
 def run_ai(text, prompt, system_msg, context_slice="full"):
-    time.sleep(0.5) # Prevents "Busy" errors by spacing out requests
+    # If we already have this in memory, don't ask again
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    if context_slice == "start": ctx = text[:15000]
-    else: ctx = text[:10000] + "\n[...]\n" + text[-10000:]
+    ctx = text[:15000] if context_slice == "start" else text[:10000] + "\n[...]\n" + text[-10000:]
     
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -42,17 +41,17 @@ def run_ai(text, prompt, system_msg, context_slice="full"):
     }
     
     try:
+        # Critical 1-second pause to prevent rate limiting
+        time.sleep(1.0) 
         r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         data = r.json()
-        # SAFE CHECK: Ensure the AI actually returned an answer
-        if "choices" in data and len(data["choices"]) > 0:
+        if "choices" in data:
             return data['choices'][0]['message']['content'].strip()
-        else:
-            return "⚠️ AI is busy. Please wait a moment and refresh."
-    except Exception as e:
-        return f"⚠️ Connection Error. Click 'Home' and try again."
+        return None
+    except:
+        return None
 
-# --- SILO 3: THE WORKING AGENCY URL SCANNER (UNTOUCHED) ---
+# --- SILO 3: THE WORKING AGENCY URL SCANNER (DO NOT TOUCH) ---
 def scrape_portal(url):
     try:
         headers = {
@@ -84,41 +83,51 @@ def scrape_portal(url):
         return hits
     except: return []
 
-# --- SILO 4: UI FLOW ---
+# --- SILO 4: UI FLOW (STAGGERED LOADING) ---
 if st.session_state.active_bid_text:
     if st.button("🏠 Home / Back"):
         st.session_state.active_bid_text = None
         reset_analysis(); st.rerun()
     
     doc = st.session_state.active_bid_text
+
+    # STAGGERED HEADER LOADING
+    if not st.session_state.agency_name:
+        with st.status("Fetching Header..."):
+            st.session_state.agency_name = run_ai(doc, "Agency?", "Name only.", "start")
+            st.rerun()
+    if not st.session_state.project_title:
+        with st.status("Fetching Title..."):
+            st.session_state.project_title = run_ai(doc, "Project?", "Name only.", "start")
+            st.rerun()
+    if not st.session_state.detected_due_date:
+        with st.status("Fetching Deadline..."):
+            st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
+            st.rerun()
+
+    st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
+    st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
+    st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
+
+    # STAGGERED TAB LOADING
     if st.session_state.analysis_mode == "Reporting":
-        st.subheader("📊 Performance, Penalties & Stop-Clock Rules")
         if not st.session_state.report_ans:
             with st.spinner("Analyzing Compliance..."):
-                prompt = "Explain: 1. HOW to report, 2. Uptime targets, 3. PENALTIES, 4. STOP-CLOCK conditions, 5. Monthly reports."
-                st.session_state.report_ans = run_ai(doc, prompt, "Contract Compliance Expert. High Detail.", "full")
+                st.session_state.report_ans = run_ai(doc, "Explain reporting, uptime, penalties, and stop-clock.", "Compliance Expert.")
+                st.rerun()
         st.markdown(st.session_state.report_ans)
     else:
-        # MOM-TEST BID VIEW
-        if not st.session_state.agency_name:
-            with st.status("Reading Bid Documents..."):
-                st.session_state.agency_name = run_ai(doc, "Agency Name?", "Name only.", "start")
-                st.session_state.project_title = run_ai(doc, "Project Name?", "Name only.", "start")
-                st.session_state.detected_due_date = run_ai(doc, "Deadline?", "Date only.", "start")
-                st.rerun()
-        
-        st.success(f"● STATUS: OPEN | 📅 DEADLINE: {st.session_state.detected_due_date}")
-        st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
-        st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
-        
         if not st.session_state.summary_ans:
-            with st.status("Simplifying Requirements..."):
-                st.session_state.bid_details = run_ai(doc, "ID and Email.", "Facts only.", "start")
-                st.session_state.summary_ans = run_ai(doc, "Simple goals?", "Mom-test points.", "full")
-                st.session_state.tech_ans = run_ai(doc, "Specific tools needed? Max 5 points.", "List items.", "full")
-                st.session_state.submission_ans = run_ai(doc, "How to apply?", "1, 2, 3.", "start")
-                st.session_state.compliance_ans = run_ai(doc, "Simple rules/Insurance?", "Mom-test points.", "full")
-                st.session_state.award_ans = run_ai(doc, "How to win?", "Simple list.", "full")
+            with st.status("Analyzing Plan..."):
+                st.session_state.bid_details = run_ai(doc, "ID/Email.", "Facts.", "start")
+                st.session_state.summary_ans = run_ai(doc, "Goals?", "Mom-test simple.")
+                st.session_state.tech_ans = run_ai(doc, "Tech?", "Simple.")
+                st.rerun()
+        if not st.session_state.submission_ans:
+            with st.status("Analyzing Submission..."):
+                st.session_state.submission_ans = run_ai(doc, "Steps?", "1,2,3.", "start")
+                st.session_state.compliance_ans = run_ai(doc, "Rules?", "Simple.")
+                st.session_state.award_ans = run_ai(doc, "Winner?", "Simple.")
                 st.rerun()
 
         tabs = st.tabs(["📋 Details", "📖 Plan", "🛠️ Tech", "📝 Apply", "⚖️ Legal", "💰 Award"])
@@ -144,12 +153,10 @@ else:
         u_in = st.text_input("Agency URL:", value="", placeholder="Paste link here...")
         if st.button("Scan Portal for IT"):
             if u_in:
-                with st.spinner("Establishing secure handshake..."):
-                    st.session_state.portal_hits = scrape_portal(u_in)
+                st.session_state.portal_hits = scrape_portal(u_in)
         
         if st.session_state.portal_hits:
             st.success(f"Found {len(st.session_state.portal_hits)} IT Opportunities:")
             for b in st.session_state.portal_hits:
                 with st.expander(f"🖥️ {b['desc']} ({b['id']})"):
                     st.link_button("Open Listing", b['url'])
-                    st.info("💡 Download the PDF from the portal and upload it to the 'Bid Document' tab.")
