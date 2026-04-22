@@ -32,17 +32,19 @@ def run_ai(text, prompt, is_compliance=False, is_header=False, is_search=False):
         # COMPLIANCE - UNTOUCHED PER ORDER
         system_rules = "RULES: 1. BE DIRECT. 2. Extract 'Definition' and 'Objective' for SLAs. 3. SIMPLE ENGLISH."
     elif is_header:
-        system_rules = "RULES: 1. Answer in 5 words or less. 2. NO extra data."
+        # IMPROVED STATUS ACCURACY RULES
+        system_rules = "RULES: 1. Answer in 5 words or less. 2. If the deadline is in the past, say CLOSED."
     elif is_search:
-        # NEW SEARCH BAR RULES
+        # SEARCH BAR - UNTOUCHED PER ORDER
         system_rules = "You are a helpful assistant. Answer specifically based on the document provided."
     else:
-        # BID RULES - FIXED TO PREVENT REPETITION IN SCOPE
+        # SCOPE OF WORK FIX - ANTI-REPETITION
         system_rules = """CORE INSTRUCTION: 
-        1. Identify unique IT labor tasks. 
+        1. Extract the specific labor tasks for IT/Cabling. 
         2. START IMMEDIATELY with vertical bullets (*).
-        3. DO NOT repeat the same task twice.
-        4. For 'Specifications', list ONLY gear names (LOCKED)."""
+        3. STRICT RULE: DO NOT repeat any phrase or task. 
+        4. Group similar tasks into a single unique bullet point.
+        5. For 'Specifications', list ONLY gear names (LOCKED)."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -79,34 +81,33 @@ st.divider()
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- ADDED: SEARCH DOCUMENT BAR ---
+    # SEARCH BAR (UNTOUCHED)
     st.subheader("🔍 Search this Document")
-    user_query = st.text_input("Ask a specific question about this contract:", placeholder="e.g. Is there a warranty requirement?")
+    user_query = st.text_input("Ask a specific question about this contract:", placeholder="e.g. What are the billing terms?")
     if user_query:
         with st.spinner("Searching..."):
             answer = run_ai(doc, user_query, is_search=True)
             st.write(f"**Answer:** {answer}")
     st.divider()
 
-    # --- COMPLIANCE MODE (UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
+        # COMPLIANCE (UNTOUCHED)
         st.subheader("📊 SLA & Non-Compliance")
         st.info(run_ai(doc, "Identify SLAs, uptime %, and non-compliance triggers.", is_compliance=True))
-
-    # --- BID DOCUMENT MODE ---
     else:
+        # PROJECT SNAPSHOT
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
-                st.session_state.status_flag = run_ai(doc, "Is it OPEN or CLOSED?", is_header=True)
+                st.session_state.status_flag = run_ai(doc, "Is the bid currently OPEN or CLOSED based on the date today?", is_header=True)
                 st.session_state.agency_name = run_ai(doc, "Agency name?", is_header=True)
                 st.session_state.project_title = run_ai(doc, "Project Title?", is_header=True)
-                st.session_state.due_date = run_ai(doc, "Deadline date?", is_header=True)
+                st.session_state.due_date = run_ai(doc, "What is the specific deadline date?", is_header=True)
             st.rerun()
 
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
         if "OPEN" in status: st.success(f"● STATUS: {status} | DUE: {st.session_state.due_date}")
-        else: st.error(f"● STATUS: {status}")
+        else: st.error(f"● STATUS: {status} (Deadline: {st.session_state.due_date})")
         
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
@@ -114,14 +115,14 @@ if st.session_state.active_bid_text:
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1: 
-            # REWRITTEN PROMPT TO STOP REPETITION
-            st.info(run_ai(doc, "Extract a list of UNIQUE physical labor tasks. Do not repeat any line."))
+            # FIXED: "Unique tasks" focus to prevent Screenshot 11:09:06 AM repetition
+            st.info(run_ai(doc, "Summarize all UNIQUE physical labor and IT service tasks required. DO NOT repeat items."))
         with b2: 
-            # SPECIFICATIONS - UNTOUCHED PER ORDER
+            # SPECIFICATIONS (UNTOUCHED)
             st.success(run_ai(doc, "List ONLY the IT gear, cables, and hardware names. No verbs."))
 
 else:
-    # --- START SCREEN (UNTOUCHED) ---
+    # START SCREEN (UNTOUCHED)
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
