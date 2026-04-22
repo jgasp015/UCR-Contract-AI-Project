@@ -28,25 +28,25 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: THE "MOM-TEST" ENGINE ---
-def run_ai(text, prompt, persona):
+# --- SILO 2: THE "CLEAN" MOM-TEST ENGINE ---
+def run_ai(text, prompt, persona_type="simple"):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    #persona instructions to be extremely simple and ignore empty templates
-    system_instruction = f"""
-    You are {persona}. 
-    STRICT RULES:
-    1. Explain like the user is a total beginner (The Mom-Test).
-    2. If a value is missing or looks like a template placeholder (e.g., 'Questions due by: [Date]'), say 'Not listed yet'.
-    3. Use short, punchy bullet points.
-    4. Use zero professional jargon.
+    # STRICT INSTRUCTION: No repeating questions, no "Not listed" spam.
+    system_instruction = """
+    You are a helpful assistant for a busy person. 
+    1. Give ONLY the final answer. 
+    2. DO NOT repeat the user's question (e.g., do not say 'What is the project title?').
+    3. If you can't find it, skip it or say 'Check the portal link below'.
+    4. Use the 'Mom-Test': Use words a child would understand.
+    5. No conversational filler like 'Here is the answer'.
     """
     
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_instruction},
-            {"role": "user", "content": f"{prompt}\n\nDOCUMENT TEXT:\n{text[:12000]}"}
+            {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text[:15000]}"}
         ],
         "temperature": 0.0
     }
@@ -54,7 +54,7 @@ def run_ai(text, prompt, persona):
         r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
         return r.json()['choices'][0]['message']['content'].strip()
     except:
-        return "⚠️ I'm a bit overwhelmed. Try clicking again!"
+        return "⚠️ Service busy. Click again."
 
 # --- SILO 3: UI FLOW ---
 with st.sidebar:
@@ -68,32 +68,29 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # 1. HEADER DATA (FORCED MOM-TEST)
+    # 1. THE HEADER (CLEANED)
     if not st.session_state.agency_name:
-        with st.status("🏗️ Reading the basics..."):
-            st.session_state.agency_name = run_ai(doc, "Who is the Government Agency? (Name only)", "a helpful assistant")
-            st.session_state.project_title = run_ai(doc, "What is the specific Title/RFP number? (Short)", "a helpful assistant")
-            st.session_state.detected_due_date = run_ai(doc, "What is the exact deadline date? If not found, say Not specified.", "a helpful assistant")
+        with st.status("🏗️ Simplifying..."):
+            st.session_state.agency_name = run_ai(doc, "Agency Name? (One line)")
+            st.session_state.project_title = run_ai(doc, "Short Project Title?")
+            st.session_state.detected_due_date = run_ai(doc, "Deadline date only?")
         st.rerun()
 
-    st.success(f"● STATUS: ACTIVE | 📅 DEADLINE: {st.session_state.detected_due_date}")
+    st.success(f"● STATUS: ACTIVE | 📅 DUE: {st.session_state.detected_due_date}")
     st.write(f"**🏛️ WHO:** {st.session_state.agency_name}")
     st.write(f"**📄 WHAT:** {st.session_state.project_title}")
     st.divider()
     
-    # 2. TABS (THE SIMPLE VERSION)
-    if st.session_state.analysis_mode == "Reporting":
-        # (Reporting logic stays here)
-        pass
-    else:
+    # 2. THE TABS (MOM-FRIENDLY)
+    if st.session_state.analysis_mode == "Standard":
         if not st.session_state.summary_ans:
-            with st.status("🚀 Making it simple..."):
-                st.session_state.bid_details = run_ai(doc, "Find the ID number and the contact email. Format as simple list.", "a secretary")
-                st.session_state.summary_ans = run_ai(doc, "In 3 bullet points, what do they want to buy? Explain like a grocery list.", "a translator")
-                st.session_state.tech_ans = run_ai(doc, "What computers or software are mentioned? List them simply.", "a tech teacher")
-                st.session_state.submission_ans = run_ai(doc, "Give me 3 easy steps to apply. Use 1, 2, 3.", "a coach")
-                st.session_state.compliance_ans = run_ai(doc, "What are the rules or insurance? (Explain simply)", "a lawyer for beginners")
-                st.session_state.award_ans = run_ai(doc, "How do they choose the winner? (Simple words)", "a fair judge")
+            with st.status("🚀 Making it easy to read..."):
+                st.session_state.bid_details = run_ai(doc, "List ID number and Email address only.")
+                st.session_state.summary_ans = run_ai(doc, "3 simple goals of this project?")
+                st.session_state.tech_ans = run_ai(doc, "What computers or software do they need?")
+                st.session_state.submission_ans = run_ai(doc, "3 simple steps to apply.")
+                st.session_state.compliance_ans = run_ai(doc, "What are the big rules/insurance?")
+                st.session_state.award_ans = run_ai(doc, "How do they choose the winner?")
             st.rerun()
 
         tabs = st.tabs(["📋 Details", "📖 The Plan", "🛠️ Tools", "📝 How to Apply", "⚖️ The Rules", "💰 How to Win"])
@@ -103,14 +100,3 @@ if st.session_state.active_bid_text:
         tabs[3].warning(st.session_state.submission_ans)
         tabs[4].error(st.session_state.compliance_ans)
         tabs[5].write(st.session_state.award_ans)
-
-else:
-    # MAIN MENU (Clean & Empty URL)
-    st.title("🏛️ Reporting Tool")
-    t1, t2, t3 = st.tabs(["📄 New Bid", "📊 Check Performance", "🔗 Scan Portal"])
-    with t1:
-        up = st.file_uploader("Upload Bid PDF", type="pdf")
-        if up:
-            st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up).pages])
-            st.session_state.analysis_mode = "Standard"; st.rerun()
-    # (Rest of menu logic...)
