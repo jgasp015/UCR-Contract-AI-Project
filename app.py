@@ -1,45 +1,29 @@
 import streamlit as st
 import requests
 from pypdf import PdfReader
-from bs4 import BeautifulSoup
-import io
-import re
 
 # --- SILO 1: SESSION & STATE ---
-def init_state():
-    keys = {
-        'active_bid_text': None, 'analysis_mode': "Standard",
-        'portal_hits': [], 'agency_name': None, 'project_title': None, 
-        'detected_due_date': None, 'summary_ans': None, 'tech_ans': None, 
-        'submission_ans': None, 'compliance_ans': None, 'award_ans': None, 
-        'bid_details': None, 'report_ans': None, 'total_saved': 360
-    }
-    for k, v in keys.items():
-        if k not in st.session_state: st.session_state[k] = v
+if 'total_saved' not in st.session_state: st.session_state.total_saved = 360
+if 'active_bid_text' not in st.session_state: st.session_state.active_bid_text = None
 
-init_state()
-
-def hard_reset():
-    for key in list(st.session_state.keys()):
-        if key != 'total_saved': del st.session_state[key]
-    init_state()
-    st.rerun()
+def clear_memory():
+    keys = ['agency_name', 'project_title', 'detected_due_date', 'summary_ans', 
+            'tech_ans', 'submission_ans', 'compliance_ans', 'award_ans', 'bid_details']
+    for k in keys: st.session_state[k] = None
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --- SILO 2: THE "CLEAN" MOM-TEST ENGINE ---
-def run_ai(text, prompt, persona_type="simple"):
+# --- SILO 2: THE "NEVER BLANK" ENGINE ---
+def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # STRICT INSTRUCTION: No repeating questions, no "Not listed" spam.
+    # Updated instructions: Always give something, never leave it blank.
     system_instruction = """
-    You are a helpful assistant for a busy person. 
-    1. Give ONLY the final answer. 
-    2. DO NOT repeat the user's question (e.g., do not say 'What is the project title?').
-    3. If you can't find it, skip it or say 'Check the portal link below'.
-    4. Use the 'Mom-Test': Use words a child would understand.
-    5. No conversational filler like 'Here is the answer'.
+    You are a helpful assistant. 
+    1. If you can't find specific data, summarize what the page is about in 1 simple sentence.
+    2. Use the 'Mom-Test': Simple words only.
+    3. NO intro text. NO repeating the question.
+    4. If the text looks like an empty form, say 'This looks like a blank template'.
     """
     
     payload = {
@@ -51,8 +35,9 @@ def run_ai(text, prompt, persona_type="simple"):
         "temperature": 0.0
     }
     try:
-        r = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        return r.json()['choices'][0]['message']['content'].strip()
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+        content = r.json()['choices'][0]['message']['content'].strip()
+        return content if content else "Information not found in this section."
     except:
         return "⚠️ Service busy. Click again."
 
@@ -62,18 +47,19 @@ with st.sidebar:
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     if st.session_state.active_bid_text:
         if st.button("🏠 Home / Back"):
-            hard_reset()
-    st.caption("UCR Master of Science - Jeffrey Gaspar")
+            st.session_state.active_bid_text = None
+            clear_memory()
+            st.rerun()
 
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # 1. THE HEADER (CLEANED)
-    if not st.session_state.agency_name:
-        with st.status("🏗️ Simplifying..."):
-            st.session_state.agency_name = run_ai(doc, "Agency Name? (One line)")
-            st.session_state.project_title = run_ai(doc, "Short Project Title?")
-            st.session_state.detected_due_date = run_ai(doc, "Deadline date only?")
+    # 1. HEADER (ALWAYS SHOWS SOMETHING)
+    if 'agency_name' not in st.session_state or not st.session_state.agency_name:
+        with st.status("🏗️ Reading Document..."):
+            st.session_state.agency_name = run_ai(doc, "Which government agency wrote this?")
+            st.session_state.project_title = run_ai(doc, "What is the project name or RFP number?")
+            st.session_state.detected_due_date = run_ai(doc, "When is the deadline? Give just the date.")
         st.rerun()
 
     st.success(f"● STATUS: ACTIVE | 📅 DUE: {st.session_state.detected_due_date}")
@@ -81,22 +67,27 @@ if st.session_state.active_bid_text:
     st.write(f"**📄 WHAT:** {st.session_state.project_title}")
     st.divider()
     
-    # 2. THE TABS (MOM-FRIENDLY)
-    if st.session_state.analysis_mode == "Standard":
-        if not st.session_state.summary_ans:
-            with st.status("🚀 Making it easy to read..."):
-                st.session_state.bid_details = run_ai(doc, "List ID number and Email address only.")
-                st.session_state.summary_ans = run_ai(doc, "3 simple goals of this project?")
-                st.session_state.tech_ans = run_ai(doc, "What computers or software do they need?")
-                st.session_state.submission_ans = run_ai(doc, "3 simple steps to apply.")
-                st.session_state.compliance_ans = run_ai(doc, "What are the big rules/insurance?")
-                st.session_state.award_ans = run_ai(doc, "How do they choose the winner?")
-            st.rerun()
+    # 2. TABS
+    tabs = st.tabs(["📋 Details", "📖 The Plan", "🛠️ Tools", "⚖️ The Rules"])
+    
+    with tabs[0]:
+        if not st.session_state.get('bid_details'):
+            st.session_state.bid_details = run_ai(doc, "Find ID numbers and contact emails.")
+        st.write(st.session_state.bid_details)
+        
+    with tabs[1]:
+        if not st.session_state.get('summary_ans'):
+            st.session_state.summary_ans = run_ai(doc, "Explain what they want to do in 3 simple points.")
+        st.info(st.session_state.summary_ans)
 
-        tabs = st.tabs(["📋 Details", "📖 The Plan", "🛠️ Tools", "📝 How to Apply", "⚖️ The Rules", "💰 How to Win"])
-        tabs[0].markdown(st.session_state.bid_details)
-        tabs[1].info(st.session_state.summary_ans)
-        tabs[2].success(st.session_state.tech_ans)
-        tabs[3].warning(st.session_state.submission_ans)
-        tabs[4].error(st.session_state.compliance_ans)
-        tabs[5].write(st.session_state.award_ans)
+else:
+    st.title("🏛️ Reporting Tool")
+    up = st.file_uploader("Upload Bid PDF", type="pdf")
+    if up:
+        text = "\n".join([p.extract_text() for p in PdfReader(up).pages])
+        if len(text.strip()) < 50:
+            st.error("❌ This PDF looks like a scanned image. I can't read the text. Please upload a 'text-searchable' PDF.")
+        else:
+            st.session_state.active_bid_text = text
+            clear_memory()
+            st.rerun()
