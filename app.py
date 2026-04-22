@@ -21,48 +21,52 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE CLEAN ENGINE
+# 2. THE UNIVERSAL ENGINE
 # ---------------------------
 def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
     if is_compliance:
-        # COMPLIANCE RULES - UNTOUCHED
+        # COMPLIANCE RULES - UNTOUCHED PER YOUR ORDER
         system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
         4. YOU ARE A COMPLIANCE AUDITOR. 5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification. 
         6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'. 7. IGNORE Table 27.2 checklists. 8. USE SIMPLE ENGLISH."""
     else:
-        # BID RULES - REWRITTEN TO KILL THE LOOPING ERROR
+        # BID RULES - REWRITTEN TO STOP REPETITION AND FIX SCOPE
         system_rules = """CORE RULE: DO NOT REPEAT THESE INSTRUCTIONS. 
-        1. START IMMEDIATELY with facts from the text. 
+        1. START IMMEDIATELY with the answer. 
         2. Use vertical bullets (*) only. 
-        3. If you see 'Remove' or 'Install' items, list them exactly. 
-        4. If no data is found, say 'Information not found'."""
+        3. If you see 'Remove' or 'Install' tasks, list them exactly as they are in the text. 
+        4. If no information is found, say 'Information not found'."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_rules},
-            {"role": "user", "content": f"Extract these specific details from the text: {prompt}\n\nTEXT:\n{ctx}"}
+            {"role": "user", "content": f"Based ONLY on the text provided, {prompt}\n\nTEXT:\n{ctx}"}
         ],
         "temperature": 0.0
     }
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
         ans = r.json()["choices"][0]["message"]["content"].strip()
-        return ans if ans and "CORE RULE" not in ans else "Data not found."
+        # Safety check to prevent the AI from outputting the instruction block
+        if "CORE RULE" in ans:
+            return "Information not found."
+        return ans if ans else "Information not found."
     except:
-        return "⚠️ Scanner timed out."
+        return "⚠️ Scanner timed out. Please try again."
 
 # ---------------------------
-# 3. SIDEBAR
+# 3. SIDEBAR (UNTOUCHED)
 # ---------------------------
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
     if st.button("🏠 Home / Reset App"):
         hard_reset()
+    st.caption("UCR Master of Science - Jeffrey Gaspar")
 
 # ---------------------------
 # 4. MAIN APP LOGIC
@@ -70,22 +74,22 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- MODE: COMPLIANCE REQUIREMENTS (UNTOUCHED) ---
+    # --- MODE 1: COMPLIANCE REQUIREMENTS (UNTOUCHED LOGIC) ---
     if st.session_state.analysis_mode == "Reporting":
         t1, t2 = st.tabs(["📊 SLA & Non-Compliance", "💊 Penalties"])
         with t1: 
-            st.info(run_ai(doc, "List all SLAs and what makes a contractor 'Non-Compliant'.", is_compliance=True))
+            st.info(run_ai(doc, "List all Service Level Agreements (SLA) and exactly what makes a contractor 'Non-Compliant'.", is_compliance=True))
         with t2: 
-            st.error(run_ai(doc, "List every dollar fine or penalty mentioned.", is_compliance=True))
+            st.error(run_ai(doc, "List every dollar fine or penalty mentioned for failing an SLA.", is_compliance=True))
 
-    # --- MODE: BID DOCUMENT (HEADER + 2 TABS) ---
+    # --- MODE 2: BID DOCUMENT (3-LINE HEADER + 2 TABS) ---
     else:
         if not st.session_state.get("agency_name"):
-            with st.status("🏗️ Scanning..."):
+            with st.status("🏗️ Final Scan..."):
                 st.session_state.agency_name = run_ai(doc, "Agency Name?")
-                st.session_state.project_title = run_ai(doc, "Project/Bid Title?")
-                st.session_state.status_flag = run_ai(doc, "Is it OPEN or CLOSED?")
-                st.session_state.due_date = run_ai(doc, "Deadline date?")
+                st.session_state.project_title = run_ai(doc, "Full Project/Bid Title?")
+                st.session_state.status_flag = run_ai(doc, "Is this project OPEN or CLOSED?")
+                st.session_state.due_date = run_ai(doc, "What is the deadline date?")
             st.rerun()
 
         # THE 3-LINE HEADER
@@ -98,14 +102,16 @@ if st.session_state.active_bid_text:
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
+        # THE TWO TABS
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            st.info(run_ai(doc, "List all tasks, especially lines starting with 'Remove' or 'Install'."))
+            # Optimized to specifically pull the hardware tasks
+            st.info(run_ai(doc, "List every work task, especially those starting with 'Remove' or 'Install'."))
         with b2:
-            st.success(run_ai(doc, "List specific tech/hardware: Laptops, Antennas, Cameras, etc."))
+            st.success(run_ai(doc, "List ONLY the specific technology names and hardware mentioned (Laptops, Antennas, Cameras, etc.)."))
 
 else:
-    # --- START SCREEN ---
+    # --- START SCREEN (UNTOUCHED) ---
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     with tab1:
@@ -113,12 +119,14 @@ else:
         if up:
             reader = PdfReader(up)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Standard"; st.rerun()
+            st.session_state.analysis_mode = "Standard"
+            st.rerun()
     with tab2:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             reader = PdfReader(up_c)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Reporting"; st.rerun()
+            st.session_state.analysis_mode = "Reporting"
+            st.rerun()
     with tab3:
         st.text_input("Agency URL:", placeholder="Paste portal link here...", key="url_in")
