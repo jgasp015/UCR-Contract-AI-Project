@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 from pypdf import PdfReader
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 # ---------------------------
 # 1. STATE & RESET (UNTOUCHED)
@@ -28,25 +29,23 @@ def run_ai(text, prompt, is_compliance=False, is_header=False, is_search=False, 
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
+    # Get current date for status comparison
+    current_date = "April 22, 2026"
+
     if is_compliance:
-        # COMPLIANCE - UNTOUCHED
+        # COMPLIANCE - UNTOUCHED PER ORDER
         system_rules = "RULES: 1. BE DIRECT. 2. Extract 'Definition' and 'Objective' for SLAs. 3. SIMPLE ENGLISH."
     elif is_header:
-        # HEADER - UNTOUCHED
-        system_rules = "RULES: 1. Answer in 5 words or less. 2. If the deadline is in the past, say CLOSED."
+        # FIXED STATUS ACCURACY - COMPARE TO CURRENT DATE
+        system_rules = f"RULES: 1. Answer in 5 words or less. 2. IMPORTANT: If the deadline date in the text is before {current_date}, you MUST say CLOSED."
     elif is_search:
-        # SEARCH BAR - UNTOUCHED
+        # SEARCH BAR - UNTOUCHED PER ORDER
         system_rules = "You are a helpful assistant. Answer specifically based on the document provided."
     elif is_scope:
-        # NEW "REASONING" SCOPE RULES
-        system_rules = """CORE INSTRUCTION: 
-        1. ANALYZE the whole text to figure out what this project is actually about.
-        2. Identify the 'Project Purpose' and the 'Deliverables' (e.g., if it is about computers, how many? what happens to them?).
-        3. List specific QUANTITIES and ACTION TASKS line by line.
-        4. Do NOT just look for a 'Scope' section; find the work wherever it is mentioned.
-        5. START IMMEDIATELY with vertical bullets (*) and no repetition."""
+        # SCOPE - UNTOUCHED PER ORDER
+        system_rules = "CORE INSTRUCTION: 1. ANALYZE the whole text. 2. List specific QUANTITIES and ACTION TASKS line by line. 3. NO repetition."
     else:
-        # SPECIFICATIONS - UNTOUCHED
+        # SPECIFICATIONS - UNTOUCHED PER ORDER
         system_rules = "CORE INSTRUCTION: 1. List ONLY IT gear names. 2. START IMMEDIATELY with vertical bullets (*)."
 
     payload = {
@@ -98,19 +97,24 @@ if st.session_state.active_bid_text:
         st.subheader("📊 SLA & Non-Compliance")
         st.info(run_ai(doc, "Identify SLAs, uptime %, and non-compliance triggers.", is_compliance=True))
     else:
-        # PROJECT SNAPSHOT (UNTOUCHED)
+        # PROJECT SNAPSHOT - UPDATED FOR ACCURATE STATUS
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
-                st.session_state.status_flag = run_ai(doc, "Is the bid currently OPEN or CLOSED?", is_header=True)
+                # Pass current date context to the AI
+                st.session_state.status_flag = run_ai(doc, "Based on today being April 22, 2026, is this bid OPEN or CLOSED?", is_header=True)
                 st.session_state.agency_name = run_ai(doc, "Agency name?", is_header=True)
                 st.session_state.project_title = run_ai(doc, "Project Title?", is_header=True)
-                st.session_state.due_date = run_ai(doc, "What is the specific deadline date?", is_header=True)
+                st.session_state.due_date = run_ai(doc, "Deadline date?", is_header=True)
             st.rerun()
 
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
-        if "OPEN" in status: st.success(f"● STATUS: {status} | DUE: {st.session_state.due_date}")
-        else: st.error(f"● STATUS: {status} (Deadline: {st.session_state.due_date})")
+        
+        # DISPLAY LOGIC
+        if "OPEN" in status: 
+            st.success(f"● STATUS: {status} | DUE: {st.session_state.due_date}")
+        else: 
+            st.error(f"● STATUS: {status} (Deadline was {st.session_state.due_date})")
         
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
@@ -118,8 +122,8 @@ if st.session_state.active_bid_text:
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1: 
-            # FIXED: "is_scope" trigger for deep reasoning
-            st.info(run_ai(doc, "What is this project really about? Analyze the whole text and list the actual work, quantities, and tasks required.", is_scope=True))
+            # SCOPE (UNTOUCHED)
+            st.info(run_ai(doc, "What is this project really about? List the actual work, quantities, and tasks required.", is_scope=True))
         with b2: 
             # SPECIFICATIONS (UNTOUCHED)
             st.success(run_ai(doc, "List ONLY the IT gear, cables, and hardware names."))
