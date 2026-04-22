@@ -20,8 +20,8 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 # --- 2. THE DATA EXTRACTION ENGINE ---
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Using a larger text slice to ensure we capture the middle pages
-    ctx = text[:25000] 
+    # Read the full text to ensure page 5 is included
+    ctx = text[:30000] 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
@@ -31,7 +31,7 @@ def run_ai(text, prompt):
                 1. START IMMEDIATELY with the data.
                 2. Use ONLY vertical bullet points (*).
                 3. NO introductory filler.
-                4. For 'Scope of Service', list the EXACT hardware tasks (Remove/Install).
+                4. For 'Scope of Service', you MUST list the 'Remove' and 'Install' tasks from the text.
                 5. If missing, say 'HIDEME'."""
             },
             {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
@@ -83,18 +83,17 @@ if st.session_state.active_bid_text:
     if st.session_state.get('analysis_mode') == "Reporting":
         t1, t2, t3, t4, t5 = st.tabs(["📊 Reporting", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
         with t1: st.info(run_ai(doc, "What data must be reported?"))
-        # (Other compliance tabs same as before)
     else:
         b1, b2, b3, b4, b5 = st.tabs(["📖 Scope of Service", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win"])
         with b1:
-            # FORCED TO EXTRACT EXACT TASKS
-            st.info(run_ai(doc, "Look at Section 4. List the exact 'Remove' and 'Install' tasks line by line."))
+            # DIRECT COMMAND TO LIST THE REMOVAL AND INSTALLATION TASKS
+            st.info(run_ai(doc, "List the 'Remove' and 'Install' tasks exactly as they appear in the Scope of Service section."))
         with b2:
-            st.success(run_ai(doc, "List the specific gear like laptops, antennas, and cables."))
+            st.success(run_ai(doc, "List specific gear like laptops, antennas, and cables mentioned."))
         with b3:
             st.warning(run_ai(doc, "3 simple steps to apply."))
         with b4:
-            st.error(run_ai(doc, "Explain the 5% local rule and 10% penalty."))
+            st.error(run_ai(doc, "Explain the 5% local business rule and the 10% penalty."))
         with b5:
             st.write(run_ai(doc, "How is the winner picked?"))
 
