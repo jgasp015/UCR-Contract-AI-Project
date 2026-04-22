@@ -1,5 +1,5 @@
 import re
-import streamlit as st  # FIXED: Corrected the import name
+import streamlit as st
 import requests
 from pypdf import PdfReader
 
@@ -15,27 +15,27 @@ def hard_reset():
     for key in list(st.session_state.keys()):
         if key != "total_saved":
             del st.session_state[key]
+    st.session_state.active_bid_text = None
     st.rerun()
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. PDF & TEXT HELPERS
+# 2. PDF HELPER
 # ---------------------------
 def extract_pdf_data(uploaded_file):
     reader = PdfReader(uploaded_file)
     full_text_parts = []
-    for i, page in enumerate(reader.pages, start=1):
+    for page in reader.pages:
         txt = page.extract_text() or ""
         full_text_parts.append(txt)
     return "\n".join(full_text_parts)
 
 # ---------------------------
-# 3. AI ENGINE (ULTRA-STRICT)
+# 3. AI ENGINE (ULTRA-SIMPLE)
 # ---------------------------
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Use the first 28,000 characters to ensure we see page 5 (Scope)
     ctx = text[:28000] 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -80,7 +80,7 @@ if st.session_state.active_bid_text:
             st.session_state.due_date = run_ai(doc, "Deadline Date?")
         st.rerun()
 
-    # THE CLEAN 3-LINE HEADER
+    # --- THE 3-LINE HEADER ---
     st.subheader("🏛️ Project Snapshot")
     if st.session_state.status_flag:
         status = st.session_state.status_flag.upper()
@@ -90,32 +90,20 @@ if st.session_state.active_bid_text:
         else: st.error(header)
 
     if st.session_state.agency_name: st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
-    if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
+    if st.session_state.project_title: st.write(f"**📄 PROJECT NAME:** {st.session_state.project_title}")
     st.divider()
 
-    # TABS (SCOPE FIXED)
-    if st.session_state.get("analysis_mode") == "Reporting":
-        t1, t2, t3, t4, t5 = st.tabs(["📊 Reporting", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
-        with t1: st.info(run_ai(doc, "What data must be reported?"))
-        with t2: st.error(run_ai(doc, "What counts as a violation?"))
-        with t3: st.warning(run_ai(doc, "What are the dollar penalties?"))
-        with t4: st.success(run_ai(doc, "How often are reports due?"))
-        with t5: st.write(run_ai(doc, "Where are reports sent?"))
-    else:
-        b1, b2, b3, b4, b5 = st.tabs(["📖 Scope of Service", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win"])
-        with b1: 
-            # FORCED TO CAPTURE PAGE 5 DATA
-            st.info(run_ai(doc, "List every task starting with 'Remove' or 'Install' from the Scope of Service section."))
-        with b2: 
-            st.success(run_ai(doc, "List specific hardware like laptops, antennas, and cables."))
-        with b3: 
-            st.warning(run_ai(doc, "3 simple steps to apply via PlanetBids."))
-        with b4: 
-            st.error(run_ai(doc, "Explain the 5% local rule and the 10% penalty."))
-        with b5: 
-            st.write(run_ai(doc, "How do they pick the winner?"))
+    # --- TWO TABS ONLY ---
+    t1, t2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
+    
+    with t1:
+        st.info(run_ai(doc, "List the exact 'Remove' and 'Install' tasks from the Scope of Service section."))
+    
+    with t2:
+        st.success(run_ai(doc, "List the specific gear like laptops, antennas, and cables mentioned in section 4."))
 
 else:
+    # START SCREEN
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
 
@@ -132,3 +120,7 @@ else:
             st.session_state.active_bid_text = extract_pdf_data(up_c)
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
+            
+    with tab3:
+        st.text_input("Agency URL:", placeholder="Paste link here...")
+        if st.button("Scan Portal"): st.info("Results will appear here.")
