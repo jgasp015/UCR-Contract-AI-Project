@@ -21,20 +21,20 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE CLEAN ENGINE
+# 2. THE ENGINE
 # ---------------------------
 def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
     if is_compliance:
-        # COMPLIANCE RULES - UNTOUCHED PER ORDER
+        # COMPLIANCE RULES - UNTOUCHED
         system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
         4. YOU ARE A COMPLIANCE AUDITOR. 5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification. 
         6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'. 7. IGNORE Table 27.2 checklists. 8. USE SIMPLE ENGLISH."""
     else:
-        # BID RULES - NEW "FACTS ONLY" LOGIC TO STOP THE LOOPING
-        system_rules = "You are a data extractor. Return ONLY a vertical bulleted list of facts. No conversation. No repeating the prompt."
+        # BID RULES - FIXED TO PREVENT GENERIC "REMOVE/INSTALL" REPETITION
+        system_rules = "Return ONLY a vertical bulleted list of facts extracted from the text. Do not use placeholders. No conversation."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -47,10 +47,7 @@ def run_ai(text, prompt, is_compliance=False):
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
         ans = r.json()["choices"][0]["message"]["content"].strip()
-        # Kill the loop if it tries to echo the prompt
-        if len(ans) > 500 and ans.count("*") > 20 and "Remove all" in ans:
-            return "Scan failed to find unique data. Please check the document pages."
-        return ans if ans else "Data not found."
+        return ans if ans else "Specific work details not found."
     except:
         return "⚠️ Scanner timed out."
 
@@ -78,7 +75,7 @@ if st.session_state.active_bid_text:
         with t2: 
             st.error(run_ai(doc, "List every dollar fine or penalty mentioned for failing an SLA.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (HEADER FIXED + LOOP-FREE TABS) ---
+    # --- BID DOCUMENT MODE (3-LINE HEADER + FIXED SCOPE) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
@@ -101,9 +98,10 @@ if st.session_state.active_bid_text:
         # BID TABS
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            st.info(run_ai(doc, "List the 'Remove' and 'Install' tasks from the Scope of Service section. Do not include rules or legal text."))
+            # BROADENED PROMPT TO CAPTURE REAL TASKS IN ANY BID
+            st.info(run_ai(doc, "Identify the 'Scope of Work' or 'Requirements' section. Summarize every specific task, service, or labor activity the contractor must perform line by line."))
         with b2:
-            st.success(run_ai(doc, "List ONLY the hardware, technology, and gear names (Laptops, Antennas, Cradlepoint, etc.) mentioned."))
+            st.success(run_ai(doc, "Identify the technical specs. List ONLY the specific hardware, software, and gear being requested."))
 
 else:
     # --- START SCREEN (UNTOUCHED) ---
