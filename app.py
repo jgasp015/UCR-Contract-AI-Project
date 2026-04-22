@@ -17,16 +17,16 @@ def hard_reset():
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-# --- 2. HELPERS ---
+# --- 2. PDF HELPERS ---
 def extract_pdf_text(uploaded_file):
     reader = PdfReader(uploaded_file)
     pages = []
 
     for i, page in enumerate(reader.pages, start=1):
-        page_text = page.extract_text()
-        if not page_text:
-            page_text = ""
-        pages.append(f"\n\n--- PAGE {i} ---\n{page_text}")
+        txt = page.extract_text()
+        if not txt:
+            txt = ""
+        pages.append(f"\n\n--- PAGE {i} ---\n{txt}")
 
     return "\n".join(pages)
 
@@ -38,46 +38,7 @@ def clean_text(text):
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
-def extract_scope_chunk(full_text):
-    if not full_text:
-        return None
-
-    text = clean_text(full_text)
-
-    patterns = [
-        r"(?is)\b4\.\s*Scope of Service\b(.*?)(?=\n\s*\d+\.\s+[A-Z])",
-        r"(?is)\bScope of Service\b(.*?)(?=\n\s*\d+\.\s+[A-Z])",
-        r"(?is)\b4\.\s*Scope of Service\b(.*)",
-        r"(?is)\bScope of Service\b(.*)"
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            chunk = match.group(0).strip()
-            if len(chunk) > 50:
-                return chunk
-
-    return None
-
-def extract_remove_install_lines(scope_text):
-    if not scope_text:
-        return None
-
-    lines = []
-    for raw_line in scope_text.splitlines():
-        line = raw_line.strip()
-
-        # Remove bullets/dashes first
-        line = re.sub(r"^[\-\u2022\*\•]+\s*", "", line).strip()
-
-        if re.match(r"^(Remove|Install)\b", line, flags=re.IGNORECASE):
-            if not line.endswith("."):
-                line += "."
-            lines.append(f"* {line}")
-
-    return "\n".join(lines) if lines else None
-
+# --- 3. AI ENGINE ---
 def run_ai(text, prompt):
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -93,10 +54,13 @@ def run_ai(text, prompt):
 1. NO INTROS.
 2. Use ONLY vertical bullet points (*).
 3. Put EVERY bullet point on a NEW LINE.
-4. If the user asks for Scope of Service, list only the direct scope items.
-5. If missing, say HIDEME."""
+4. If the answer is missing, say HIDEME.
+5. Do not invent details that are not in the text."""
             },
-            {"role": "user", "content": f"{prompt}\n\nTEXT:\n{text}"}
+            {
+                "role": "user",
+                "content": f"{prompt}\n\nTEXT:\n{text[:35000]}"
+            }
         ],
         "temperature": 0.0
     }
@@ -109,31 +73,230 @@ def run_ai(text, prompt):
             timeout=30
         )
         r.raise_for_status()
-        ans = r.json()['choices'][0]['message']['content'].strip()
+        ans = r.json()["choices"][0]["message"]["content"].strip()
         return None if "HIDEME" in ans.upper() else ans
     except Exception:
         return None
 
+# --- 4. SECTION FINDERS ---
+def find_section(text, start_patterns, end_patterns=None):
+    text = clean_text(text)
+    if not text:
+        return None
+
+    for start_pat in start_patterns:
+        start_match = re.search(start_pat, text, flags=re.IGNORECASE | re.DOTALL)
+        if start_match:
+            start_index = start_match.start()
+
+            if end_patterns:
+                end_index = len(text)
+                search_area = text[start_match.end():]
+
+                for end_pat in end_patterns:
+                    end_match = re.search(end_pat, search_area, flags=re.IGNORECASE | re.DOTALL)
+                    if end_match:
+                        candidate_end = start_match.end() + end_match.start()
+                        if candidate_end < end_index:
+                            end_index = candidate_end
+
+                return text[start_index:end_index].strip()
+
+            return text[start_index:].strip()
+
+    return None
+
+def extract_bullets_from_section(section_text):
+    if not section_text:
+        return None
+
+    lines = []
+    for raw in section_text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        if re.match(r"^[\-\u2022\*\•]+\s*", line):
+            line = re.sub(r"^[\-\u2022\*\•]+\s*", "", line).strip()
+            if line:
+                if not line.endswith("."):
+                    line += "."
+                lines.append(f"* {line}")
+
+    return "\n".join(lines) if lines else None
+
+# --- 5. STANDARD BID EXTRACTION ---
+def extract_scope_chunk(doc):
+    return find_section(
+        doc,
+        start_patterns=[
+            r"\b\d+\.\s*Scope of Service\b",
+            r"\bScope of Service\b"
+        ],
+        end_patterns=[
+            r"\n\s*\d+\.\s+[A-Z]",
+            r"\n\s*[A-Z][A-Za-z /&]{3,}:\s",
+            r"\n\s*Proposal Requirements\b",
+            r"\n\s*LBE Participation Requirements\b"
+        ]
+    )
+
+def extract_scope_lines(scope_text):
+    if not scope_text:
+        return None
+
+    lines = []
+    for raw_line in scope_text.splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^[\-\u2022\*\•]+\s*", "", line).strip()
+
+        if re.match(r"^(Remove|Install)\b", line, flags=re.IGNORECASE):
+            if not line.endswith("."):
+                line += "."
+            lines.append(f"* {line}")
+
+    return "\n".join(lines) if lines else None
+
 def get_scope_of_service(doc):
     scope_chunk = extract_scope_chunk(doc)
 
-    # First try direct parsing from the extracted section
-    parsed_lines = extract_remove_install_lines(scope_chunk)
-    if parsed_lines:
-        return parsed_lines
+    parsed = extract_scope_lines(scope_chunk)
+    if parsed:
+        return parsed
 
-    # Fallback: send only the scope chunk to the AI
     if scope_chunk:
-        ai_answer = run_ai(
-            scope_chunk,
-            "List every single scope item that starts with Remove or Install, line by line."
-        )
-        if ai_answer:
-            return ai_answer
+        ai_ans = run_ai(scope_chunk, "List every item that starts with Remove or Install.")
+        if ai_ans:
+            return ai_ans
 
     return "No Scope of Service lines found."
 
-# --- 3. UI SIDEBAR ---
+# --- 6. REPORTING / COMPLIANCE EXTRACTION ---
+def extract_reporting_chunk(doc):
+    return find_section(
+        doc,
+        start_patterns=[
+            r"\bCompliance Requirements\b",
+            r"\bReporting Requirements\b",
+            r"\bAdministrative Requirements\b",
+            r"\bPerformance Requirements\b",
+            r"\bService Level Agreement\b",
+            r"\bSLA\b",
+            r"\bTechnical Requirements\b"
+        ],
+        end_patterns=[
+            r"\n\s*\d+\.\s+[A-Z]",
+            r"\n\s*[A-Z][A-Za-z /&]{3,}:\s"
+        ]
+    )
+
+def get_reporting_data(doc):
+    section = extract_reporting_chunk(doc)
+
+    if section:
+        bullets = extract_bullets_from_section(section)
+        if bullets:
+            return bullets
+
+        ai_ans = run_ai(
+            section,
+            "List specifically what data must be reported or submitted line by line."
+        )
+        if ai_ans:
+            return ai_ans
+
+    ai_fallback = run_ai(
+        doc,
+        "Find only the compliance or reporting requirements. List exactly what data, fields, responses, or documentation must be submitted line by line."
+    )
+    return ai_fallback or "No reporting requirements found."
+
+def get_violations(doc):
+    section = extract_reporting_chunk(doc)
+
+    if section:
+        ai_ans = run_ai(
+            section,
+            "List penalties, violations, non-compliance triggers, defaults, or failures mentioned in this text line by line."
+        )
+        if ai_ans:
+            return ai_ans
+
+    ai_fallback = run_ai(
+        doc,
+        "Find all violations, penalties, defaults, non-compliance events, or failure conditions. List them line by line."
+    )
+    return ai_fallback or "No violations found."
+
+def get_remedies(doc):
+    section = extract_reporting_chunk(doc)
+
+    if section:
+        ai_ans = run_ai(
+            section,
+            "List all remedies, cure periods, corrective actions, recovery steps, or required fixes line by line."
+        )
+        if ai_ans:
+            return ai_ans
+
+    ai_fallback = run_ai(
+        doc,
+        "Find all remedies, cure periods, corrective actions, or required response actions. List them line by line."
+    )
+    return ai_fallback or "No remedies found."
+
+def get_frequency(doc):
+    section = extract_reporting_chunk(doc)
+
+    if section:
+        ai_ans = run_ai(
+            section,
+            "List all time intervals, due dates, reporting frequency, deadlines, or recurring schedules line by line."
+        )
+        if ai_ans:
+            return ai_ans
+
+    ai_fallback = run_ai(
+        doc,
+        "Find all frequencies, due dates, reporting schedules, deadlines, and recurring timing requirements. List them line by line."
+    )
+    return ai_fallback or "No frequency requirements found."
+
+def get_admin(doc):
+    section = extract_reporting_chunk(doc)
+
+    if section:
+        ai_ans = run_ai(
+            section,
+            "List all admin contacts, portals, forms, submission methods, approval steps, and administrative requirements line by line."
+        )
+        if ai_ans:
+            return ai_ans
+
+    ai_fallback = run_ai(
+        doc,
+        "Find all administrative requirements including portals, submission methods, contacts, approvals, forms, and required documentation. List them line by line."
+    )
+    return ai_fallback or "No administrative requirements found."
+
+# --- 7. SNAPSHOT HELPERS ---
+def get_agency_name(doc):
+    ai_ans = run_ai(doc[:12000], "Agency name only.")
+    return ai_ans or "Unknown"
+
+def get_project_title(doc):
+    ai_ans = run_ai(doc[:16000], "Project title only.")
+    return ai_ans or "Unknown"
+
+def get_status(doc):
+    ai_ans = run_ai(doc[:16000], "Is this project OPEN or CLOSED? Answer only OPEN or CLOSED.")
+    return ai_ans or "UNKNOWN"
+
+def get_due_date(doc):
+    ai_ans = run_ai(doc[:16000], "Deadline date only.")
+    return ai_ans
+
+# --- 8. UI SIDEBAR ---
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
@@ -141,20 +304,20 @@ with st.sidebar:
         hard_reset()
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
-# --- 4. MAIN NAVIGATION ---
+# --- 9. MAIN APP ---
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
 
-    # --- BID DOCUMENT HEADER (3 LINES ONLY) ---
-    if not st.session_state.get('agency_name'):
+    if not st.session_state.get("agency_name"):
         with st.status("Scanning..."):
-            st.session_state.agency_name = run_ai(doc[:12000], "Agency Name?")
-            st.session_state.project_title = run_ai(doc[:12000], "Project Title?")
-            st.session_state.status_flag = run_ai(doc[:12000], "Is this project OPEN or CLOSED?")
-            st.session_state.due_date = run_ai(doc[:12000], "Deadline Date?")
+            st.session_state.agency_name = get_agency_name(doc)
+            st.session_state.project_title = get_project_title(doc)
+            st.session_state.status_flag = get_status(doc)
+            st.session_state.due_date = get_due_date(doc)
         st.rerun()
 
     st.subheader("🏛️ Project Snapshot")
+
     if st.session_state.status_flag:
         status = st.session_state.status_flag.upper()
         due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
@@ -167,13 +330,27 @@ if st.session_state.active_bid_text:
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
     if st.session_state.project_title:
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
+
     st.divider()
 
-    # --- TABS ---
-    if st.session_state.get('analysis_mode') == "Reporting":
+    if st.session_state.get("analysis_mode") == "Reporting":
         t1, t2, t3, t4, t5 = st.tabs(["📊 Reporting", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
+
         with t1:
-            st.info(run_ai(doc, "List specifically what data must be reported line by line."))
+            st.info(get_reporting_data(doc))
+
+        with t2:
+            st.warning(get_violations(doc))
+
+        with t3:
+            st.success(get_remedies(doc))
+
+        with t4:
+            st.info(get_frequency(doc))
+
+        with t5:
+            st.write(get_admin(doc))
+
     else:
         b1, b2, b3, b4, b5 = st.tabs(["📖 Scope of Service", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win"])
 
@@ -181,16 +358,20 @@ if st.session_state.active_bid_text:
             st.info(get_scope_of_service(doc))
 
         with b2:
-            st.success(run_ai(doc, "List the hardware like laptops, antennas, cables line by line."))
+            tools_ans = run_ai(doc, "List the hardware, software, tools, cables, antennas, laptops, docks, cameras, and equipment line by line.")
+            st.success(tools_ans or "No tools or equipment found.")
 
         with b3:
-            st.warning(run_ai(doc, "3 simple steps to apply via PlanetBids."))
+            apply_ans = run_ai(doc, "List 3 simple steps to apply.")
+            st.warning(apply_ans or "No application steps found.")
 
         with b4:
-            st.error(run_ai(doc, "Explain the 5% local business rule and the 10% penalty."))
+            rules_ans = run_ai(doc, "List the main rules, local business requirements, penalties, and compliance requirements line by line.")
+            st.error(rules_ans or "No rules found.")
 
         with b5:
-            st.write(run_ai(doc, "How do they pick the winner?"))
+            win_ans = run_ai(doc, "Explain how the winner is selected in bullet points.")
+            st.write(win_ans or "No award criteria found.")
 
 else:
     st.title("🏛️ Reporting Tool")
@@ -209,3 +390,6 @@ else:
             st.session_state.active_bid_text = extract_pdf_text(up_c)
             st.session_state.analysis_mode = "Reporting"
             st.rerun()
+
+    with tab3:
+        st.write("Paste or connect agency URL flow here later.")
