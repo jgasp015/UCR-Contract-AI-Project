@@ -57,7 +57,7 @@ def scrape_portal(url):
     except: return []
 
 # --- 3. UI LOGIC ---
-st.title("🏛️ Reporting Tool")
+st.title("🏛️ Public Sector Contract Analyzer")
 
 # --- GLOBAL SIDEBAR (HOME BUTTON IS ALWAYS HERE NOW) ---
 with st.sidebar:
