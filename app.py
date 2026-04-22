@@ -21,16 +21,22 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE ENGINE (MOM-MODE)
+# 2. THE MOM-MODE ENGINE
 # ---------------------------
-def run_ai(text, prompt, mom_mode=False):
+def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:45000] 
     
-    system_rules = "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 4. IF MISSING, SAY 'HIDEME'."
+    # Strict rules to stop the "Yes/No" and table repetition
+    system_rules = "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE."
     
-    if mom_mode:
-        system_rules += " 5. IGNORE TECHNICAL TABLES AND 'YES/NO' FORMS. 6. EXPLAIN LIKE A NEIGHBOR (SIMPLE ENGLISH)."
+    if is_compliance:
+        system_rules += """ 
+        4. IGNORE all tables, 'Yes/No' forms, and 'Bidder meets requirement' text. 
+        5. ONLY find actual SLA rules: Uptime %, Time to Repair, and Outage limits. 
+        6. Explain it simply like a neighbor would."""
+    else:
+        system_rules += " 4. IF MISSING, SAY 'HIDEME'."
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -63,18 +69,19 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- MODE 1: COMPLIANCE REQUIREMENTS (FIXED FOR MOM) ---
+    # --- COMPLIANCE MODE (SLA FOCUS) ---
     if st.session_state.analysis_mode == "Reporting":
-        t1, t2 = st.tabs(["📊 What to Report", "💊 Penalties"])
+        t1, t2 = st.tabs(["📊 SLA Requirements", "💊 Penalties"])
         with t1: 
-            st.info(run_ai(doc, "What specific records or updates does the contractor have to send to the city? Ignore the technical 'Table 27' checklists.", mom_mode=True))
+            # Prompt specifically asks for Uptime, Repair, and Outages
+            st.info(run_ai(doc, "What are the SLA rules for Availability (Uptime %), Time to Repair (Fixing things), and Excessive Outages?", is_compliance=True))
         with t2: 
-            st.error(run_ai(doc, "What are the dollar fines or penalties if the contractor messes up or misses a deadline?", mom_mode=True))
+            st.error(run_ai(doc, "What are the dollar fines or credits if the service goes down or takes too long to fix?", is_compliance=True))
 
-    # --- MODE 2: BID DOCUMENT (LOCKED - NO CHANGES) ---
+    # --- BID DOCUMENT MODE (3-LINE HEADER + 2 TABS) ---
     else:
         if not st.session_state.get("agency_name"):
-            with st.status("🏗️ Final Scan..."):
+            with st.status("🏗️ Scanning..."):
                 st.session_state.agency_name = run_ai(doc, "Agency Name?")
                 st.session_state.project_title = run_ai(doc, "Project Title?")
                 st.session_state.status_flag = run_ai(doc, "Is this project OPEN or CLOSED?")
@@ -93,9 +100,9 @@ if st.session_state.active_bid_text:
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line. Be specific."))
+            st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line."))
         with b2:
-            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned (Laptops, Antennas, Cameras, etc.) line by line."))
+            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned (Laptops, Antennas, etc.) line by line."))
 
 else:
     # --- START SCREEN ---
