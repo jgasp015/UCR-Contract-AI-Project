@@ -14,7 +14,7 @@ def hard_reset():
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-# --- 2. ENGINE (ULTRA-STRICT FOR MOTHER) ---
+# --- 2. THE ITEMIZER ENGINE ---
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:12000] + "\n...\n" + text[-5000:]
@@ -23,7 +23,12 @@ def run_ai(text, prompt):
         "messages": [
             {
                 "role": "system", 
-                "content": "RULES: 1. NO INTROS. 2. VERTICAL BULLETS. 3. BE EXTREMELY BRIEF. 4. IF MISSING, SAY 'HIDEME'."
+                "content": """RULES: 
+                1. START IMMEDIATELY with the data. 
+                2. Use ONLY vertical bullet points (*). 
+                3. Put EVERY bullet point on a NEW LINE. 
+                4. NO paragraphs. 
+                5. If missing, say 'HIDEME'."""
             },
             {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
         ],
@@ -46,14 +51,14 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- MODE A: COMPLIANCE REQUIREMENTS (TABS ONLY - NO HEADER) ---
+    # --- MODE A: COMPLIANCE REQUIREMENTS (TABS ONLY) ---
     if st.session_state.analysis_mode == "Reporting":
         t1, t2, t3, t4, t5 = st.tabs(["📊 What to Report", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
-        with t1: st.info(run_ai(doc, "What specific data (sales, uptime, etc.) must be reported?"))
-        with t2: st.error(run_ai(doc, "What counts as a violation or SLA breach?"))
-        with t3: st.warning(run_ai(doc, "What are the specific dollar penalties or remedies?"))
-        with t4: st.success(run_ai(doc, "How often are reports due?"))
-        with t5: st.write(run_ai(doc, "Where or how are the reports submitted?"))
+        with t1: st.info(run_ai(doc, "List specific data to report (Sales, Uptime, etc.) line by line."))
+        with t2: st.error(run_ai(doc, "List violation/breach types line by line."))
+        with t3: st.warning(run_ai(doc, "List dollar penalties or remedies line by line."))
+        with t4: st.success(run_ai(doc, "List reporting frequency/dates line by line."))
+        with t5: st.write(run_ai(doc, "List submission steps line by line."))
 
     # --- MODE B: BID DOCUMENT (3-LINE HEADER ONLY) ---
     else:
@@ -65,7 +70,7 @@ if st.session_state.active_bid_text:
                 st.session_state.due_date = run_ai(doc, "Deadline Date?")
             st.rerun()
 
-        # THE 3-LINE HEADER
+        # CLEAN 3-LINE HEADER
         if st.session_state.status_flag:
             status = st.session_state.status_flag.upper()
             due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
@@ -76,16 +81,15 @@ if st.session_state.active_bid_text:
         if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
-        # TABS
+        # TABS (LINE-BY-LINE)
         b1, b2, b3, b4, b5 = st.tabs(["📖 Plan", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win"])
-        with b1: st.info(run_ai(doc, "3 simple goals of this project."))
-        with b2: st.success(run_ai(doc, "Basic tools needed."))
-        with b3: st.warning(run_ai(doc, "3 steps to apply."))
-        with b4: st.error(run_ai(doc, "Main insurance or legal rules."))
-        with b5: st.write(run_ai(doc, "How do they pick the winner?"))
+        with b1: st.info(run_ai(doc, "List 3 project goals line by line."))
+        with b2: st.success(run_ai(doc, "List required tools/gear line by line."))
+        with b3: st.warning(run_ai(doc, "List 3 application steps line by line."))
+        with b4: st.error(run_ai(doc, "List insurance/legal rules line by line."))
+        with b5: st.write(run_ai(doc, "List how winner is chosen line by line."))
 
 else:
-    # START SCREEN
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     with tab1:
