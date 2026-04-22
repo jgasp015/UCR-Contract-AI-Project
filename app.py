@@ -73,22 +73,11 @@ def unique_keep_order(lines):
     seen = set()
     out = []
     for line in lines:
-        key = line.strip().lower()
+        key = re.sub(r"[^a-z0-9 ]+", "", line.lower()).strip()
         if key and key not in seen:
             seen.add(key)
             out.append(line)
     return out
-
-def is_toc_page(text):
-    if not text:
-        return False
-
-    # Lines like "27.3 SERVICE LEVEL AGREEMENTS .......... 88"
-    dot_leader_hits = re.findall(r"\.{5,}\s*\d+\s*$", text, flags=re.MULTILINE)
-    short_index_hits = re.findall(r"^\s*\d+(\.\d+)+\s+.*\.{3,}\s*\d+\s*$", text, flags=re.MULTILINE)
-    has_contents_word = bool(re.search(r"\b(table of contents|contents)\b", text, flags=re.IGNORECASE))
-
-    return has_contents_word or len(dot_leader_hits) >= 4 or len(short_index_hits) >= 4
 
 def join_wrapped_lines(lines):
     rebuilt = []
@@ -127,7 +116,7 @@ def get_page_range_text(pages, start_page, end_page):
     chunks = []
     for p in pages:
         if start_page <= p["page_num"] <= end_page:
-            chunks.append(p["text"])
+            chunks.append(f"\n<<<PAGE {p['page_num']}>>>\n{p['text']}")
     return "\n".join(chunks)
 
 def find_first_page_containing(pages, pattern):
@@ -135,6 +124,16 @@ def find_first_page_containing(pages, pattern):
         if re.search(pattern, p["text"], flags=re.IGNORECASE):
             return p["page_num"]
     return None
+
+def is_toc_page(text):
+    if not text:
+        return False
+
+    dot_leader_hits = re.findall(r"\.{5,}\s*\d+\s*$", text, flags=re.MULTILINE)
+    short_index_hits = re.findall(r"^\s*\d+(\.\d+)+\s+.*\.{3,}\s*\d+\s*$", text, flags=re.MULTILINE)
+    has_contents_word = bool(re.search(r"\b(table of contents|contents)\b", text, flags=re.IGNORECASE))
+
+    return has_contents_word or len(dot_leader_hits) >= 4 or len(short_index_hits) >= 4
 
 # ---------------------------
 # 3. AI ENGINE
@@ -160,7 +159,7 @@ def run_ai(text, prompt):
             },
             {
                 "role": "user",
-                "content": f"{prompt}\n\nTEXT:\n{text[:45000]}"
+                "content": f"{prompt}\n\nTEXT:\n{text[:50000]}"
             }
         ],
         "temperature": 0.0
@@ -248,7 +247,6 @@ def extract_scope_section_from_pages(pages):
     if not start_page:
         return ""
 
-    # Pull a few pages after scope starts because the section can span pages
     scope_window = get_page_range_text(pages, start_page, min(start_page + 4, len(pages)))
     scope_window = remove_page_markers(scope_window)
 
@@ -276,7 +274,7 @@ def get_scope_of_service(doc, pages):
 
         if re.match(r"^(Remove|Install)\b", cleaned, flags=re.IGNORECASE):
             cleaned = cleaned.rstrip(" .") + "."
-            if len(cleaned) > len("Remove.") and len(cleaned) > len("Install."):
+            if len(cleaned) > 10:
                 results.append(cleaned)
 
     results = unique_keep_order(results)
@@ -324,22 +322,65 @@ def get_win_tab(doc):
 # ---------------------------
 # 6. REPORTING / SLA
 # ---------------------------
+def extract_sla_page_from_toc(pages):
+    """
+    Looks through TOC pages for the actual SLA starting page number.
+    Example line:
+    27.3 SERVICE LEVEL AGREEMENTS (SLA)........88
+    """
+    if not pages:
+        return None
+
+    toc_pages = [p for p in pages if is_toc_page(p["text"])]
+
+    patterns = [
+        r"SERVICE LEVEL AGREEMENTS\s*\(SLA\)\s*\.{3,}\s*(\d+)",
+        r"Technical Service Level Agreements\s*\(SLA\)\s*\.{3,}\s*(\d+)",
+        r"Bidder Response to Service Level Agreements\s*\.{3,}\s*(\d+)",
+        r"Technical SLA General Requirements\s*\.{3,}\s*(\d+)",
+        r"Trouble Ticket Stop Clock Conditions\s*\.{3,}\s*(\d+)"
+    ]
+
+    best_page = None
+
+    for p in toc_pages:
+        txt = p["text"]
+        for pat in patterns:
+            for m in re.finditer(pat, txt, flags=re.IGNORECASE):
+                try:
+                    page_num = int(m.group(1))
+                    if 1 <= page_num <= len(pages):
+                        if best_page is None or page_num < best_page:
+                            best_page = page_num
+                except Exception:
+                    pass
+
+    return best_page
+
 def get_reporting_pages(pages):
     if not pages:
         return []
 
     hits = []
 
+    # First choice: use TOC to jump to actual SLA pages
+    sla_start = extract_sla_page_from_toc(pages)
+    if sla_start:
+        # grab a large enough window because SLA spans several pages
+        start = max(1, sla_start - 1)
+        end = min(len(pages), sla_start + 20)
+        for p in pages:
+            if start <= p["page_num"] <= end and not is_toc_page(p["text"]):
+                hits.append(p)
+        if hits:
+            return hits
+
+    # Fallback: search non-TOC pages for real SLA content
     for p in pages:
         txt = p["text"]
-        if not txt:
+        if not txt or is_toc_page(txt):
             continue
 
-        # Skip TOC/index pages
-        if is_toc_page(txt):
-            continue
-
-        # Stronger indicators of actual SLA content, not index lines
         has_real_sla_content = re.search(
             r"(Service Level Agreement|SLA\b|Stop Clock|Outage|Availability|Trouble Ticket|Ticket Stop Clock|Notification|Provisioning|Excessive Outage|Catastrophic Outage|Customer or Contractor)",
             txt,
@@ -347,7 +388,7 @@ def get_reporting_pages(pages):
         )
 
         has_content_language = re.search(
-            r"(shall|must|response|objective|requirement|measurement|report|reports|reporting|minutes|hours|days|credit|penalty|threshold)",
+            r"(shall|must|response|objective|requirement|measurement|report|reports|reporting|minutes|hours|days|credit|penalty|threshold|restore|restoration|notify|ticket)",
             txt,
             flags=re.IGNORECASE
         )
@@ -363,11 +404,10 @@ def extract_reporting_text(doc, pages):
     if hits:
         page_nums = [p["page_num"] for p in hits]
         start_page = min(page_nums)
-        end_page = min(max(page_nums) + 2, len(pages))
+        end_page = max(page_nums)
         text = get_page_range_text(pages, start_page, end_page)
         return remove_page_markers(text)
 
-    # Fallback: search whole doc but without page markers
     return remove_page_markers(doc)
 
 def get_reporting_data(doc, pages):
@@ -375,17 +415,18 @@ def get_reporting_data(doc, pages):
 
     ai_ans = run_ai(
         text,
-        """From the actual SLA / Service Level Agreement section, list ONLY reporting and measurable compliance items such as:
-- reporting obligations
-- outage reporting
-- response times
-- restoration times
-- service levels
+        """From the actual SLA / Service Level Agreement pages, list ONLY reporting and measurable compliance items such as:
+- outage reporting obligations
+- SLA reporting
+- response time requirements
+- restoration time requirements
+- service level metrics
 - stop clock conditions
-- ticket handling requirements
-- metrics, thresholds, and notice requirements
+- ticket handling and escalation requirements
+- notice or notification requirements
+- thresholds, measurements, and monitoring duties
 
-Do NOT include table of contents, page numbers, section titles, or index lines."""
+Do NOT include table of contents, page numbers, or section headers."""
     )
     return ai_ans or "No reporting requirements found."
 
@@ -394,13 +435,13 @@ def get_violations(doc, pages):
 
     ai_ans = run_ai(
         text,
-        """From the actual SLA section, list all violation or failure triggers such as:
+        """From the actual SLA pages, list all violation or failure triggers such as:
 - missed response times
 - missed restoration times
-- service outages
+- outage failures
 - availability failures
-- breach of SLA objective
-- non-compliance events
+- missed service level objectives
+- contractor non-compliance events
 
 Do NOT include page numbers or table of contents."""
     )
@@ -411,7 +452,7 @@ def get_remedies(doc, pages):
 
     ai_ans = run_ai(
         text,
-        """From the actual SLA section, list all remedies, credits, corrective actions, cure actions, or contractor obligations after failure.
+        """From the actual SLA pages, list all remedies, service credits, corrective actions, cure obligations, or contractor responsibilities after failure.
 Do NOT include page numbers or table of contents."""
     )
     return ai_ans or "No remedies found."
@@ -421,13 +462,13 @@ def get_frequency(doc, pages):
 
     ai_ans = run_ai(
         text,
-        """From the actual SLA section, list all timing and frequency requirements such as:
-- reporting frequency
+        """From the actual SLA pages, list all timing and frequency requirements such as:
+- report frequency
 - notice deadlines
 - response windows
 - restoration windows
-- time measurements
-- recurring intervals
+- measurement intervals
+- recurring monitoring or reporting intervals
 
 Do NOT include page numbers or table of contents."""
     )
@@ -438,20 +479,39 @@ def get_admin(doc, pages):
 
     ai_ans = run_ai(
         text,
-        """From the actual SLA / reporting section, list all admin items such as:
-- submission method
-- contact or party responsible
-- notification duties
-- documentation requirements
-- reports to be provided
-- ticket or recordkeeping expectations
+        """From the actual SLA / reporting pages, list all administrative items such as:
+- who must report or notify
+- who receives the notice
+- documentation or recordkeeping duties
+- report submission requirements
+- ticket logging or tracking requirements
+- escalation or communication duties
 
 Do NOT include page numbers or table of contents."""
     )
     return ai_ans or "No administrative requirements found."
 
 # ---------------------------
-# 7. SIDEBAR
+# 7. OPTIONAL DEBUG PANELS
+# ---------------------------
+def get_scope_debug(doc, pages):
+    section = extract_scope_section_from_pages(pages)
+    if not section:
+        return "No scope section found."
+    preview = section[:3000]
+    return preview
+
+def get_reporting_debug(pages):
+    hits = get_reporting_pages(pages)
+    if not hits:
+        return "No reporting/SLA pages detected."
+
+    lines = [f"Detected SLA pages: {', '.join(str(p['page_num']) for p in hits[:25])}"]
+    sample = "\n\n".join([f"PAGE {p['page_num']}:\n{p['text'][:1200]}" for p in hits[:3]])
+    return "\n".join(lines) + "\n\n" + sample
+
+# ---------------------------
+# 8. SIDEBAR
 # ---------------------------
 with st.sidebar:
     st.header("Project Performance")
@@ -461,7 +521,7 @@ with st.sidebar:
     st.caption("UCR Master of Science - Jeffrey Gaspar")
 
 # ---------------------------
-# 8. MAIN APP
+# 9. MAIN APP
 # ---------------------------
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
@@ -493,7 +553,9 @@ if st.session_state.active_bid_text:
     st.divider()
 
     if st.session_state.get("analysis_mode") == "Reporting":
-        t1, t2, t3, t4, t5 = st.tabs(["📊 Reporting", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
+        t1, t2, t3, t4, t5, t6 = st.tabs(
+            ["📊 Reporting", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin", "🔎 Debug SLA"]
+        )
 
         with t1:
             st.info(get_reporting_data(doc, pages))
@@ -510,8 +572,13 @@ if st.session_state.active_bid_text:
         with t5:
             st.write(get_admin(doc, pages))
 
+        with t6:
+            st.code(get_reporting_debug(pages))
+
     else:
-        b1, b2, b3, b4, b5 = st.tabs(["📖 Scope of Service", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win"])
+        b1, b2, b3, b4, b5, b6 = st.tabs(
+            ["📖 Scope of Service", "🛠️ Tools", "📝 Apply", "⚖️ Rules", "💰 Win", "🔎 Debug Scope"]
+        )
 
         with b1:
             st.info(get_scope_of_service(doc, pages))
@@ -527,6 +594,9 @@ if st.session_state.active_bid_text:
 
         with b5:
             st.write(get_win_tab(doc))
+
+        with b6:
+            st.code(get_scope_debug(doc, pages))
 
 else:
     st.title("🏛️ Reporting Tool")
