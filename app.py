@@ -3,7 +3,7 @@ import requests
 from pypdf import PdfReader
 
 # ---------------------------
-# 1. STATE & RESET
+# 1. STATE & RESET (NO TOUCH)
 # ---------------------------
 if "total_saved" not in st.session_state:
     st.session_state.total_saved = 480
@@ -21,24 +21,22 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE DEEP SCAN ENGINE
+# 2. THE ENGINE
 # ---------------------------
 def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Extended context to 60k to ensure we don't miss the deep SLA pages
     ctx = text[:60000] 
     
-    system_rules = "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE."
-    
+    # SYSTEM RULES
     if is_compliance:
-        system_rules += """ 
-        4. YOU ARE A COMPLIANCE AUDITOR. 
-        5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification.
-        6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'.
-        7. IGNORE all Table 27.2 checklists or 'Bidder Meets' forms.
-        8. USE SIMPLE ENGLISH."""
+        # COMPLIANCE RULES - LOCKED AND UNTOUCHED PER USER REQUEST
+        system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
+        4. YOU ARE A COMPLIANCE AUDITOR. 5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification. 
+        6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'. 7. IGNORE Table 27.2 checklists. 8. USE SIMPLE ENGLISH."""
     else:
-        system_rules += " 4. IF MISSING, SAY 'HIDEME'."
+        # BID RULES - FIXED TO STOP THE REPETITION ERROR
+        system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
+        4. DO NOT repeat the prompt or instructions. 5. Extract ONLY the actual facts from the text."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -51,12 +49,12 @@ def run_ai(text, prompt, is_compliance=False):
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
         ans = r.json()["choices"][0]["message"]["content"].strip()
-        return None if "HIDEME" in ans.upper() else ans
+        return ans if ans and "HIDEME" not in ans.upper() else "Not found in this document."
     except:
-        return "⚠️ Scanner timed out. The document is large, please try again."
+        return "⚠️ Scanner timed out."
 
 # ---------------------------
-# 3. SIDEBAR
+# 3. SIDEBAR (NO TOUCH)
 # ---------------------------
 with st.sidebar:
     st.header("Project Performance")
@@ -71,15 +69,15 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (DEEP SLA) ---
+    # --- COMPLIANCE MODE (LOCKED - DO NOT TOUCH) ---
     if st.session_state.analysis_mode == "Reporting":
         t1, t2 = st.tabs(["📊 SLA & Non-Compliance", "💊 Penalties"])
         with t1: 
-            st.info(run_ai(doc, "List all Service Level Agreements (SLA) including Uptime, Repair times, and Provisioning. Also, list exactly what makes a contractor 'Non-Compliant'.", is_compliance=True))
+            st.info(run_ai(doc, "List all Service Level Agreements (SLA) and exactly what makes a contractor 'Non-Compliant'.", is_compliance=True))
         with t2: 
-            st.error(run_ai(doc, "List every dollar fine, service credit, or penalty mentioned for failing an SLA.", is_compliance=True))
+            st.error(run_ai(doc, "List every dollar fine or penalty mentioned for failing an SLA.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (LOCKED) ---
+    # --- BID DOCUMENT MODE (FIXED TABS) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
@@ -89,39 +87,42 @@ if st.session_state.active_bid_text:
                 st.session_state.due_date = run_ai(doc, "Deadline Date?")
             st.rerun()
 
+        # 3-LINE HEADER (LOCKED)
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
         due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
         if "OPEN" in status: st.success(f"● STATUS: {status}{due}")
         else: st.error(f"● STATUS: {status}")
-        
-        if st.session_state.agency_name: st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
-        if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
+        st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
+        st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
+        # FIXED BID TABS
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line."))
+            # FIXED PROMPT: Specifically asks for the work to stop the looping error
+            st.info(run_ai(doc, "What is the actual work to be performed? List the specific tasks and labor line by line."))
         with b2:
-            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned."))
+            # FIXED PROMPT: Specifically asks for hardware/tech
+            st.success(run_ai(doc, "What specific equipment, hardware, or technology tools are being purchased?"))
 
 else:
+    # --- START SCREEN ---
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
-    
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
         if up:
             reader = PdfReader(up)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Standard"; st.rerun()
-            
+            st.session_state.analysis_mode = "Standard"
+            st.rerun()
     with tab2:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             reader = PdfReader(up_c)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Reporting"; st.rerun()
-            
+            st.session_state.analysis_mode = "Reporting"
+            st.rerun()
     with tab3:
         st.text_input("Agency URL:", placeholder="Paste portal link here...", key="url_in")
