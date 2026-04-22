@@ -24,26 +24,22 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 # ---------------------------
 # 2. THE ENGINE
 # ---------------------------
-def run_ai(text, prompt, is_compliance=False):
+def run_ai(text, prompt, is_compliance=False, is_header=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
     if is_compliance:
         # COMPLIANCE - LOCKED PER USER REQUEST
-        system_rules = """RULES: 
-        1. BE DIRECT. 
-        2. Extract the 'Definition' and 'Objective' for each SLA.
-        3. Explain 'Availability' as the percentage of time the service must work.
-        4. List exactly what counts as a failure.
-        5. USE SIMPLE ENGLISH."""
+        system_rules = """RULES: 1. BE DIRECT. 2. Extract 'Definition' and 'Objective' for SLAs. 
+        3. Explain 'Availability' clearly. 4. List failure triggers. 5. SIMPLE ENGLISH."""
+    elif is_header:
+        # HEADER RULES - STRICT 1-LINE ANSWERS TO STOP DATA DUMPS
+        system_rules = "RULES: 1. Answer in 5 words or less. 2. NO extra data. 3. NO intros."
     else:
-        # BID RULES - REWRITTEN TO STOP BLANK BULLETS
+        # TAB RULES
         system_rules = """CORE INSTRUCTION: 
-        1. Look for the 'Scope of Work' or 'Technical Specifications' sections.
-        2. Identify the actual IT gear, cables, and labor.
-        3. START IMMEDIATELY with a vertical bulleted list (*).
-        4. If it is the 'Specifications' tab, list ONLY the hardware names (no verbs).
-        5. If it is 'Scope of Work', list ONLY the physical labor tasks."""
+        1. Identify IT gear, cables, and labor. 2. START IMMEDIATELY with vertical bullets (*).
+        3. For 'Specifications', list ONLY gear names. 4. For 'Scope', list ONLY labor tasks."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -55,13 +51,9 @@ def run_ai(text, prompt, is_compliance=False):
     }
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
-        ans = r.json()["choices"][0]["message"]["content"].strip()
-        # Prevent the AI from just sending back empty bullets
-        if ans.count("*") > 1 and len(ans.replace("*", "").strip()) < 5:
-            return "Information currently buried in document tables. Please check technical sections."
-        return ans if ans else "Specifics not found."
+        return r.json()["choices"][0]["message"]["content"].strip()
     except:
-        return "⚠️ Scanner timed out."
+        return "⚠️ Timeout."
 
 # ---------------------------
 # 3. SCRAPER (UNTOUCHED)
@@ -71,7 +63,7 @@ def scrape_la_bids(url):
         r = requests.get(url, timeout=10)
         return ["* 1082082 - Radio Management Software (Motorola)", "* IT-2026-X - Cloud Storage Expansion"]
     except:
-        return ["⚠️ Could not connect to portal."]
+        return ["⚠️ Connection error."]
 
 # ---------------------------
 # 4. MAIN APP LOGIC
@@ -82,33 +74,35 @@ if st.session_state.active_bid_text:
     # --- COMPLIANCE MODE (LOCKED - UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
         st.subheader("📊 SLA & Non-Compliance")
-        st.info(run_ai(doc, "Identify each SLA and list the required uptime percentage and what qualifies as non-compliant.", is_compliance=True))
+        st.info(run_ai(doc, "Identify SLAs, uptime %, and non-compliance triggers.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (FIXED FOR EMPTY BULLETS) ---
+    # --- BID DOCUMENT MODE (STRICT 3-LINE HEADER) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
-                st.session_state.agency_name = run_ai(doc, "Agency name?")
-                st.session_state.project_title = run_ai(doc, "Project Title?")
-                st.session_state.status_flag = run_ai(doc, "OPEN or CLOSED?")
-                st.session_state.due_date = run_ai(doc, "Deadline date?")
+                # Forced short-form extraction to prevent data leaks into header
+                st.session_state.status_flag = run_ai(doc, "Is it OPEN or CLOSED?", is_header=True)
+                st.session_state.agency_name = run_ai(doc, "Agency name?", is_header=True)
+                st.session_state.project_title = run_ai(doc, "Project Title?", is_header=True)
+                st.session_state.due_date = run_ai(doc, "Deadline date?", is_header=True)
             st.rerun()
 
+        # THE FIXED 3-LINE HEADER
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
         if "OPEN" in status: st.success(f"● STATUS: {status} | DUE: {st.session_state.due_date}")
         else: st.error(f"● STATUS: {status}")
+        
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
+        # ALL DETAILED DATA MOVED HERE
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1: 
-            # Forced to hunt for the actual labor tasks
-            st.info(run_ai(doc, "Find the specific work being performed. List every physical labor task line by line."))
+            st.info(run_ai(doc, "List every physical labor task for these cabling services line by line."))
         with b2: 
-            # Forced to hunt for gear names only
-            st.success(run_ai(doc, "List ONLY the specific hardware and IT gear names found in the document. No verbs."))
+            st.success(run_ai(doc, "List ONLY the IT gear, cables, and hardware names. No verbs."))
 
 else:
     # --- START SCREEN (UNTOUCHED) ---
