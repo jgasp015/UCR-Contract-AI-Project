@@ -21,17 +21,23 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. UNIVERSAL SCAN ENGINE
+# 2. THE FINAL SCAN ENGINE
 # ---------------------------
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    ctx = text[:40000] 
+    # Huge context slice to find info anywhere in the document
+    ctx = text[:45000] 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system", 
-                "content": "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 4. IF MISSING, SAY 'HIDEME'."
+                "content": """RULES: 
+                1. NO INTROS. 
+                2. VERTICAL BULLETS ONLY (*). 
+                3. EVERY BULLET ON NEW LINE. 
+                4. IGNORE phrases like 'Bidder understands and shall meet'. 
+                5. If missing, say 'HIDEME'."""
             },
             {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
         ],
@@ -60,19 +66,18 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- MODE 1: COMPLIANCE REQUIREMENTS (TABS ONLY - NO HEADER) ---
+    # --- MODE 1: COMPLIANCE REQUIREMENTS (TWO TABS ONLY) ---
     if st.session_state.analysis_mode == "Reporting":
-        t1, t2, t3, t4, t5 = st.tabs(["📊 What to Report", "⚠️ Violations", "💊 Remedies", "📅 Frequency", "🏢 Admin"])
-        with t1: st.info(run_ai(doc, "List specifically what data or metrics must be reported line by line."))
-        with t2: st.error(run_ai(doc, "List exactly what counts as a violation or breach line by line."))
-        with t3: st.warning(run_ai(doc, "List the specific dollar penalties or remedies line by line."))
-        with t4: st.success(run_ai(doc, "How often are reports due? List frequencies line by line."))
-        with t5: st.write(run_ai(doc, "Where or how are the reports submitted?"))
+        t1, t2 = st.tabs(["📊 What to Report", "💊 Penalties"])
+        with t1: 
+            st.info(run_ai(doc, "List specifically what data, sales, or metrics must be reported line by line. Ignore 'Yes/No' responses."))
+        with t2: 
+            st.error(run_ai(doc, "List the specific dollar penalties, remedies, or deductions for non-compliance line by line."))
 
     # --- MODE 2: BID DOCUMENT (3-LINE HEADER + 2 TABS) ---
     else:
         if not st.session_state.get("agency_name"):
-            with st.status("Scanning..."):
+            with st.status("🏗️ Final Scan..."):
                 st.session_state.agency_name = run_ai(doc, "Agency Name?")
                 st.session_state.project_title = run_ai(doc, "Project Title?")
                 st.session_state.status_flag = run_ai(doc, "Is this project OPEN or CLOSED?")
@@ -85,6 +90,7 @@ if st.session_state.active_bid_text:
         due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
         if "OPEN" in status: st.success(f"● STATUS: {status}{due}")
         else: st.error(f"● STATUS: {status}")
+        
         if st.session_state.agency_name: st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
@@ -92,12 +98,12 @@ if st.session_state.active_bid_text:
         # 2 TABS ONLY
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            st.info(run_ai(doc, "Find the Scope of Work. List every task (like Remove/Install) line by line. Be specific to the hardware mentioned."))
+            st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line. Be specific."))
         with b2:
-            st.success(run_ai(doc, "List ONLY the technology and equipment names mentioned (Laptops, Antennas, Cameras, etc.) line by line."))
+            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned (Laptops, Antennas, Cameras, etc.) line by line."))
 
 else:
-    # --- START SCREEN (STRICT SEPARATION) ---
+    # --- START SCREEN ---
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     
