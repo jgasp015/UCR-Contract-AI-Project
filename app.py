@@ -3,7 +3,7 @@ import requests
 from pypdf import PdfReader
 
 # ---------------------------
-# 1. STATE & RESET (NO TOUCH)
+# 1. STATE & RESET (UNTOUCHED)
 # ---------------------------
 if "total_saved" not in st.session_state:
     st.session_state.total_saved = 480
@@ -21,40 +21,43 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE ENGINE
+# 2. THE CLEAN ENGINE
 # ---------------------------
 def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
-    # SYSTEM RULES
     if is_compliance:
-        # COMPLIANCE RULES - LOCKED AND UNTOUCHED PER USER REQUEST
+        # COMPLIANCE RULES - UNTOUCHED PER YOUR ORDER
         system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
         4. YOU ARE A COMPLIANCE AUDITOR. 5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification. 
         6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'. 7. IGNORE Table 27.2 checklists. 8. USE SIMPLE ENGLISH."""
     else:
-        # BID RULES - FIXED TO STOP THE REPETITION ERROR
-        system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
-        4. DO NOT repeat the prompt or instructions. 5. Extract ONLY the actual facts from the text."""
+        # BID RULES - REWRITTEN TO FIX REPETITION AND ACCURACY
+        system_rules = """RULES: 
+        1. START IMMEDIATELY with the answer. 
+        2. NO INTROS like 'Here is the work'. 
+        3. Use ONLY vertical bullets (*). 
+        4. If you see 'Remove' or 'Install' tasks, list them exactly as written. 
+        5. DO NOT repeat the prompt or your instructions in the output."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_rules},
-            {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
+            {"role": "user", "content": f"Based ONLY on the text provided, {prompt}\n\nTEXT:\n{ctx}"}
         ],
         "temperature": 0.0
     }
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
         ans = r.json()["choices"][0]["message"]["content"].strip()
-        return ans if ans and "HIDEME" not in ans.upper() else "Not found in this document."
+        return ans if ans and "HIDEME" not in ans.upper() else "Information not found in the uploaded document."
     except:
-        return "⚠️ Scanner timed out."
+        return "⚠️ Scanner timed out. Please try again."
 
 # ---------------------------
-# 3. SIDEBAR (NO TOUCH)
+# 3. SIDEBAR
 # ---------------------------
 with st.sidebar:
     st.header("Project Performance")
@@ -69,7 +72,7 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (LOCKED - DO NOT TOUCH) ---
+    # --- COMPLIANCE MODE (STRICTLY UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
         t1, t2 = st.tabs(["📊 SLA & Non-Compliance", "💊 Penalties"])
         with t1: 
@@ -77,34 +80,33 @@ if st.session_state.active_bid_text:
         with t2: 
             st.error(run_ai(doc, "List every dollar fine or penalty mentioned for failing an SLA.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (FIXED TABS) ---
+    # --- BID DOCUMENT MODE (HEADER FIXED + ACCURATE SCOPE) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
-                st.session_state.agency_name = run_ai(doc, "Agency Name?")
-                st.session_state.project_title = run_ai(doc, "Project Title?")
-                st.session_state.status_flag = run_ai(doc, "Is this project OPEN or CLOSED?")
-                st.session_state.due_date = run_ai(doc, "Deadline Date?")
+                st.session_state.agency_name = run_ai(doc, "Extract the name of the Agency or City.")
+                st.session_state.project_title = run_ai(doc, "Extract the full Project/Bid Name.")
+                st.session_state.status_flag = run_ai(doc, "Is the bid OPEN or CLOSED?")
+                st.session_state.due_date = run_ai(doc, "What is the deadline date/time?")
             st.rerun()
 
-        # 3-LINE HEADER (LOCKED)
+        # THE 3-LINE HEADER
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
         due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
+        
         if "OPEN" in status: st.success(f"● STATUS: {status}{due}")
         else: st.error(f"● STATUS: {status}")
         st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
         st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
-        # FIXED BID TABS
+        # THE TWO BID TABS
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
-            # FIXED PROMPT: Specifically asks for the work to stop the looping error
-            st.info(run_ai(doc, "What is the actual work to be performed? List the specific tasks and labor line by line."))
+            st.info(run_ai(doc, "List every single work task required, especially anything starting with 'Remove' or 'Install'."))
         with b2:
-            # FIXED PROMPT: Specifically asks for hardware/tech
-            st.success(run_ai(doc, "What specific equipment, hardware, or technology tools are being purchased?"))
+            st.success(run_ai(doc, "List the specific technology gear, hardware, and tools being used or bought."))
 
 else:
     # --- START SCREEN ---
