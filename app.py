@@ -23,8 +23,8 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 # ---------------------------
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Single deep slice of text
-    ctx = text[:25000] 
+    # Single deep slice of text to ensure we see the middle pages
+    ctx = text[:28000] 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
@@ -87,10 +87,10 @@ if st.session_state.active_bid_text:
     t1, t2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
     
     with t1:
-        st.info(run_ai(doc, "List the 'Remove' and 'Install' tasks from the document line by line."))
+        st.info(run_ai(doc, "List the 'Remove' and 'Install' tasks from Section 4 of the document line by line."))
     
     with t2:
-        st.success(run_ai(doc, "List ONLY the specific technology names like Camera, Laptop, Cradlepoint, etc."))
+        st.success(run_ai(doc, "List ONLY the specific technology names like Camera, Laptop, Cradlepoint, VPU, and Antenna line by line."))
 
 else:
     # START SCREEN
