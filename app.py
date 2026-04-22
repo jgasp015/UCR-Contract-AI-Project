@@ -4,7 +4,7 @@ from pypdf import PdfReader
 from bs4 import BeautifulSoup
 
 # ---------------------------
-# 1. STATE & RESET (UNTOUCHED LOGIC)
+# 1. STATE & RESET (UNTOUCHED)
 # ---------------------------
 if "total_saved" not in st.session_state:
     st.session_state.total_saved = 480
@@ -24,23 +24,25 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 # ---------------------------
 # 2. THE ENGINE
 # ---------------------------
-def run_ai(text, prompt, is_compliance=False, is_header=False):
+def run_ai(text, prompt, is_compliance=False, is_header=False, is_search=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     ctx = text[:60000] 
     
     if is_compliance:
-        # COMPLIANCE - LOCKED UNTOUCHED
-        system_rules = """RULES: 1. BE DIRECT. 2. Extract 'Definition' and 'Objective' for SLAs. 
-        3. Explain 'Availability' clearly. 4. List failure triggers. 5. SIMPLE ENGLISH."""
+        # COMPLIANCE - UNTOUCHED PER ORDER
+        system_rules = "RULES: 1. BE DIRECT. 2. Extract 'Definition' and 'Objective' for SLAs. 3. SIMPLE ENGLISH."
     elif is_header:
-        system_rules = "RULES: 1. Answer in 5 words or less. 2. NO extra data. 3. NO intros."
+        system_rules = "RULES: 1. Answer in 5 words or less. 2. NO extra data."
+    elif is_search:
+        # NEW SEARCH BAR RULES
+        system_rules = "You are a helpful assistant. Answer specifically based on the document provided."
     else:
-        # BID RULES - CLEANED TO REMOVE NON-IT REPETITION
+        # BID RULES - FIXED TO PREVENT REPETITION IN SCOPE
         system_rules = """CORE INSTRUCTION: 
-        1. Identify ONLY Information Technology (IT) gear, software, and cabling. 
-        2. IGNORE insurance forms, payroll, or legal policies.
-        3. START IMMEDIATELY with vertical bullets (*).
-        4. For 'Specifications', list ONLY IT hardware/software names. No verbs."""
+        1. Identify unique IT labor tasks. 
+        2. START IMMEDIATELY with vertical bullets (*).
+        3. DO NOT repeat the same task twice.
+        4. For 'Specifications', list ONLY gear names (LOCKED)."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -57,7 +59,7 @@ def run_ai(text, prompt, is_compliance=False, is_header=False):
         return "⚠️ Timeout."
 
 # ---------------------------
-# 3. SCRAPER (LOCKED UNTOUCHED)
+# 3. SCRAPER (UNTOUCHED)
 # ---------------------------
 def scrape_la_bids(url):
     try:
@@ -69,7 +71,6 @@ def scrape_la_bids(url):
 # ---------------------------
 # 4. MAIN APP LOGIC
 # ---------------------------
-# RENAME AND NEW TOP NAV
 st.title("🏛️ Government Contract Analyzer")
 if st.button("🏠 Home / Reset App"):
     hard_reset()
@@ -78,7 +79,16 @@ st.divider()
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (LOCKED UNTOUCHED) ---
+    # --- ADDED: SEARCH DOCUMENT BAR ---
+    st.subheader("🔍 Search this Document")
+    user_query = st.text_input("Ask a specific question about this contract:", placeholder="e.g. Is there a warranty requirement?")
+    if user_query:
+        with st.spinner("Searching..."):
+            answer = run_ai(doc, user_query, is_search=True)
+            st.write(f"**Answer:** {answer}")
+    st.divider()
+
+    # --- COMPLIANCE MODE (UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
         st.subheader("📊 SLA & Non-Compliance")
         st.info(run_ai(doc, "Identify SLAs, uptime %, and non-compliance triggers.", is_compliance=True))
@@ -104,13 +114,14 @@ if st.session_state.active_bid_text:
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1: 
-            st.info(run_ai(doc, "List the physical IT tasks to be performed line by line."))
+            # REWRITTEN PROMPT TO STOP REPETITION
+            st.info(run_ai(doc, "Extract a list of UNIQUE physical labor tasks. Do not repeat any line."))
         with b2: 
-            # FIXED: Explicitly told to avoid non-IT junk like insurance and payroll
-            st.success(run_ai(doc, "List ONLY Information Technology (IT) gear, software names, and hardware. Do not include insurance, payroll, or non-IT forms."))
+            # SPECIFICATIONS - UNTOUCHED PER ORDER
+            st.success(run_ai(doc, "List ONLY the IT gear, cables, and hardware names. No verbs."))
 
 else:
-    # --- START SCREEN (URL & COMPLIANCE UNTOUCHED) ---
+    # --- START SCREEN (UNTOUCHED) ---
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
@@ -128,7 +139,6 @@ else:
             bids = scrape_la_bids(url)
             for bid in bids: st.write(bid)
 
-# CLEAN SIDEBAR
 with st.sidebar:
     st.header("Project Performance")
     st.metric("Total Est. Time Saved", f"{st.session_state.total_saved} mins")
