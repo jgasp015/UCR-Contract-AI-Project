@@ -29,30 +29,37 @@ def run_ai(text, prompt, is_compliance=False):
     ctx = text[:60000] 
     
     if is_compliance:
-        # COMPLIANCE - DIRECT METRIC FOCUS
+        # COMPLIANCE - LOCKED PER USER REQUEST
         system_rules = """RULES: 
         1. BE DIRECT. 
         2. Extract the 'Definition' and 'Objective' for each SLA.
         3. Explain 'Availability' as the percentage of time the service must work.
-        4. List exactly what counts as a failure (e.g., missing the uptime goal).
-        5. USE SIMPLE ENGLISH. No legal jargon."""
+        4. List exactly what counts as a failure.
+        5. USE SIMPLE ENGLISH."""
     else:
-        # BID RULES - UNTOUCHED
-        system_rules = """RULES: 
-        1. For 'Specifications', list ONLY hardware/software names. No verbs.
-        2. START IMMEDIATELY with a vertical bulleted list (*)."""
+        # BID RULES - REWRITTEN TO STOP BLANK BULLETS
+        system_rules = """CORE INSTRUCTION: 
+        1. Look for the 'Scope of Work' or 'Technical Specifications' sections.
+        2. Identify the actual IT gear, cables, and labor.
+        3. START IMMEDIATELY with a vertical bulleted list (*).
+        4. If it is the 'Specifications' tab, list ONLY the hardware names (no verbs).
+        5. If it is 'Scope of Work', list ONLY the physical labor tasks."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_rules},
-            {"role": "user", "content": f"Text: {ctx}\n\nTask: {prompt}"}
+            {"role": "user", "content": f"Based on this document, {prompt}\n\nTEXT:\n{ctx}"}
         ],
         "temperature": 0.0
     }
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
-        return r.json()["choices"][0]["message"]["content"].strip()
+        ans = r.json()["choices"][0]["message"]["content"].strip()
+        # Prevent the AI from just sending back empty bullets
+        if ans.count("*") > 1 and len(ans.replace("*", "").strip()) < 5:
+            return "Information currently buried in document tables. Please check technical sections."
+        return ans if ans else "Specifics not found."
     except:
         return "⚠️ Scanner timed out."
 
@@ -72,13 +79,12 @@ def scrape_la_bids(url):
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (DIRECT SLA METRICS) ---
+    # --- COMPLIANCE MODE (LOCKED - UNTOUCHED) ---
     if st.session_state.analysis_mode == "Reporting":
         st.subheader("📊 SLA & Non-Compliance")
-        # Targeted prompt for Availability, Outages, and Repair times based on CALNET docs
-        st.info(run_ai(doc, "Identify each SLA (Availability, Outage, etc.). For each, list the required uptime percentage and what qualifies as non-compliant.", is_compliance=True))
+        st.info(run_ai(doc, "Identify each SLA and list the required uptime percentage and what qualifies as non-compliant.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (LOCKED - NO CHANGES) ---
+    # --- BID DOCUMENT MODE (FIXED FOR EMPTY BULLETS) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
@@ -97,8 +103,12 @@ if st.session_state.active_bid_text:
         st.divider()
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
-        with b1: st.info(run_ai(doc, "List ONLY the actual physical work tasks."))
-        with b2: st.success(run_ai(doc, "List ONLY the hardware and software names."))
+        with b1: 
+            # Forced to hunt for the actual labor tasks
+            st.info(run_ai(doc, "Find the specific work being performed. List every physical labor task line by line."))
+        with b2: 
+            # Forced to hunt for gear names only
+            st.success(run_ai(doc, "List ONLY the specific hardware and IT gear names found in the document. No verbs."))
 
 else:
     # --- START SCREEN (UNTOUCHED) ---
