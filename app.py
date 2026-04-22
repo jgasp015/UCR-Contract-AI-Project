@@ -21,24 +21,21 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE FINAL SCAN ENGINE
+# 2. THE ENGINE (MOM-MODE)
 # ---------------------------
-def run_ai(text, prompt):
+def run_ai(text, prompt, mom_mode=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Huge context slice to find info anywhere in the document
     ctx = text[:45000] 
+    
+    system_rules = "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 4. IF MISSING, SAY 'HIDEME'."
+    
+    if mom_mode:
+        system_rules += " 5. IGNORE TECHNICAL TABLES AND 'YES/NO' FORMS. 6. EXPLAIN LIKE A NEIGHBOR (SIMPLE ENGLISH)."
+
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
-            {
-                "role": "system", 
-                "content": """RULES: 
-                1. NO INTROS. 
-                2. VERTICAL BULLETS ONLY (*). 
-                3. EVERY BULLET ON NEW LINE. 
-                4. IGNORE phrases like 'Bidder understands and shall meet'. 
-                5. If missing, say 'HIDEME'."""
-            },
+            {"role": "system", "content": system_rules},
             {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
         ],
         "temperature": 0.0
@@ -66,15 +63,15 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- MODE 1: COMPLIANCE REQUIREMENTS (TWO TABS ONLY) ---
+    # --- MODE 1: COMPLIANCE REQUIREMENTS (FIXED FOR MOM) ---
     if st.session_state.analysis_mode == "Reporting":
         t1, t2 = st.tabs(["📊 What to Report", "💊 Penalties"])
         with t1: 
-            st.info(run_ai(doc, "List specifically what data, sales, or metrics must be reported line by line. Ignore 'Yes/No' responses."))
+            st.info(run_ai(doc, "What specific records or updates does the contractor have to send to the city? Ignore the technical 'Table 27' checklists.", mom_mode=True))
         with t2: 
-            st.error(run_ai(doc, "List the specific dollar penalties, remedies, or deductions for non-compliance line by line."))
+            st.error(run_ai(doc, "What are the dollar fines or penalties if the contractor messes up or misses a deadline?", mom_mode=True))
 
-    # --- MODE 2: BID DOCUMENT (3-LINE HEADER + 2 TABS) ---
+    # --- MODE 2: BID DOCUMENT (LOCKED - NO CHANGES) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Final Scan..."):
@@ -84,7 +81,6 @@ if st.session_state.active_bid_text:
                 st.session_state.due_date = run_ai(doc, "Deadline Date?")
             st.rerun()
 
-        # 3-LINE HEADER
         st.subheader("🏛️ Project Snapshot")
         status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
         due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
@@ -95,7 +91,6 @@ if st.session_state.active_bid_text:
         if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
         st.divider()
 
-        # 2 TABS ONLY
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
         with b1:
             st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line. Be specific."))
