@@ -1,4 +1,3 @@
-import re
 import streamlit as st
 import requests
 from pypdf import PdfReader
@@ -32,7 +31,7 @@ def extract_pdf_data(uploaded_file):
     return "\n".join(full_text_parts)
 
 # ---------------------------
-# 3. AI ENGINE (ULTRA-SIMPLE)
+# 3. AI ENGINE (TAXPAYER FOCUS)
 # ---------------------------
 def run_ai(text, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -42,7 +41,7 @@ def run_ai(text, prompt):
         "messages": [
             {
                 "role": "system", 
-                "content": "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 4. IF MISSING, SAY 'HIDEME'."
+                "content": "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 4. BE BRIEF."
             },
             {"role": "user", "content": f"{prompt}\n\nTEXT:\n{ctx}"}
         ],
@@ -50,10 +49,9 @@ def run_ai(text, prompt):
     }
     try:
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
-        ans = r.json()["choices"][0]["message"]["content"].strip()
-        return None if "HIDEME" in ans.upper() else ans
+        return r.json()["choices"][0]["message"]["content"].strip()
     except:
-        return None
+        return "⚠️ Service busy. Please try again."
 
 # ---------------------------
 # 4. SIDEBAR
@@ -71,7 +69,6 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # ONE-TIME DATA EXTRACTION
     if not st.session_state.get("agency_name"):
         with st.status("Scanning..."):
             st.session_state.agency_name = run_ai(doc, "Agency Name?")
@@ -82,25 +79,28 @@ if st.session_state.active_bid_text:
 
     # --- THE 3-LINE HEADER ---
     st.subheader("🏛️ Project Snapshot")
-    if st.session_state.status_flag:
-        status = st.session_state.status_flag.upper()
-        header = f"● {status}"
-        if st.session_state.due_date: header += f" | DUE: {st.session_state.due_date}"
-        if "OPEN" in status: st.success(header)
-        else: st.error(header)
+    
+    # Line 1: Status
+    status = st.session_state.status_flag.upper() if st.session_state.status_flag else "UNKNOWN"
+    due = f" | DUE: {st.session_state.due_date}" if ("OPEN" in status and st.session_state.due_date) else ""
+    if "OPEN" in status: st.success(f"● STATUS: {status}{due}")
+    else: st.error(f"● STATUS: {status}")
 
+    # Line 2: Agency
     if st.session_state.agency_name: st.write(f"**🏛️ AGENCY:** {st.session_state.agency_name}")
-    if st.session_state.project_title: st.write(f"**📄 PROJECT NAME:** {st.session_state.project_title}")
+    
+    # Line 3: Project Name
+    if st.session_state.project_title: st.write(f"**📄 BID NAME:** {st.session_state.project_title}")
     st.divider()
 
     # --- TWO TABS ONLY ---
     t1, t2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
     
     with t1:
-        st.info(run_ai(doc, "List the exact 'Remove' and 'Install' tasks from the Scope of Service section."))
+        st.info(run_ai(doc, "List the 'Remove' and 'Install' work tasks from the Scope of Service section."))
     
     with t2:
-        st.success(run_ai(doc, "List the specific gear like laptops, antennas, and cables mentioned in section 4."))
+        st.success(run_ai(doc, "List ONLY the technology and gear being used (e.g., Laptops, 4-in-1 Antennas, Cradlepoint, Cameras, VPU, cables)."))
 
 else:
     # START SCREEN
@@ -111,16 +111,14 @@ else:
         up = st.file_uploader("Upload Bid PDF", type="pdf", key="u1")
         if up:
             st.session_state.active_bid_text = extract_pdf_data(up)
-            st.session_state.analysis_mode = "Standard"
             st.rerun()
 
     with tab2:
+        st.write("Compliance section currently uses same logic - upload contract here.")
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             st.session_state.active_bid_text = extract_pdf_data(up_c)
-            st.session_state.analysis_mode = "Reporting"
             st.rerun()
             
     with tab3:
         st.text_input("Agency URL:", placeholder="Paste link here...")
-        if st.button("Scan Portal"): st.info("Results will appear here.")
