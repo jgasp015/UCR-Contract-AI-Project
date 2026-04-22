@@ -21,20 +21,22 @@ def hard_reset():
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # ---------------------------
-# 2. THE MOM-MODE ENGINE
+# 2. THE DEEP SCAN ENGINE
 # ---------------------------
 def run_ai(text, prompt, is_compliance=False):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    ctx = text[:45000] 
+    # Extended context to 60k to ensure we don't miss the deep SLA pages
+    ctx = text[:60000] 
     
-    # Strict rules to stop the "Yes/No" and table repetition
     system_rules = "RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE."
     
     if is_compliance:
         system_rules += """ 
-        4. IGNORE all tables, 'Yes/No' forms, and 'Bidder meets requirement' text. 
-        5. ONLY find actual SLA rules: Uptime %, Time to Repair, and Outage limits. 
-        6. Explain it simply like a neighbor would."""
+        4. YOU ARE A COMPLIANCE AUDITOR. 
+        5. FIND EVERY SINGLE SLA: Availability, Time to Repair, Provisioning, and Notification.
+        6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT' OR A 'FAILURE'.
+        7. IGNORE all Table 27.2 checklists or 'Bidder Meets' forms.
+        8. USE SIMPLE ENGLISH."""
     else:
         system_rules += " 4. IF MISSING, SAY 'HIDEME'."
 
@@ -47,11 +49,11 @@ def run_ai(text, prompt, is_compliance=False):
         "temperature": 0.0
     }
     try:
-        r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=35)
         ans = r.json()["choices"][0]["message"]["content"].strip()
         return None if "HIDEME" in ans.upper() else ans
     except:
-        return "⚠️ Scanner timed out."
+        return "⚠️ Scanner timed out. The document is large, please try again."
 
 # ---------------------------
 # 3. SIDEBAR
@@ -69,16 +71,15 @@ with st.sidebar:
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (SLA FOCUS) ---
+    # --- COMPLIANCE MODE (DEEP SLA) ---
     if st.session_state.analysis_mode == "Reporting":
-        t1, t2 = st.tabs(["📊 SLA Requirements", "💊 Penalties"])
+        t1, t2 = st.tabs(["📊 SLA & Non-Compliance", "💊 Penalties"])
         with t1: 
-            # Prompt specifically asks for Uptime, Repair, and Outages
-            st.info(run_ai(doc, "What are the SLA rules for Availability (Uptime %), Time to Repair (Fixing things), and Excessive Outages?", is_compliance=True))
+            st.info(run_ai(doc, "List all Service Level Agreements (SLA) including Uptime, Repair times, and Provisioning. Also, list exactly what makes a contractor 'Non-Compliant'.", is_compliance=True))
         with t2: 
-            st.error(run_ai(doc, "What are the dollar fines or credits if the service goes down or takes too long to fix?", is_compliance=True))
+            st.error(run_ai(doc, "List every dollar fine, service credit, or penalty mentioned for failing an SLA.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE (3-LINE HEADER + 2 TABS) ---
+    # --- BID DOCUMENT MODE (LOCKED) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
@@ -102,10 +103,9 @@ if st.session_state.active_bid_text:
         with b1:
             st.info(run_ai(doc, "List the actual work tasks (like Remove/Install) line by line."))
         with b2:
-            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned (Laptops, Antennas, etc.) line by line."))
+            st.success(run_ai(doc, "List ONLY the technology names and hardware mentioned."))
 
 else:
-    # --- START SCREEN ---
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
     
@@ -114,16 +114,14 @@ else:
         if up:
             reader = PdfReader(up)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Standard"
-            st.rerun()
+            st.session_state.analysis_mode = "Standard"; st.rerun()
             
     with tab2:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf", key="u2")
         if up_c:
             reader = PdfReader(up_c)
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in reader.pages])
-            st.session_state.analysis_mode = "Reporting"
-            st.rerun()
+            st.session_state.analysis_mode = "Reporting"; st.rerun()
             
     with tab3:
         st.text_input("Agency URL:", placeholder="Paste portal link here...", key="url_in")
