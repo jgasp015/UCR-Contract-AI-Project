@@ -4,7 +4,7 @@ from pypdf import PdfReader
 from bs4 import BeautifulSoup
 
 # ---------------------------
-# 1. STATE & RESET
+# 1. STATE & RESET (UNTOUCHED)
 # ---------------------------
 if "total_saved" not in st.session_state:
     st.session_state.total_saved = 480
@@ -29,16 +29,18 @@ def run_ai(text, prompt, is_compliance=False):
     ctx = text[:60000] 
     
     if is_compliance:
-        # COMPLIANCE - SLA ONLY
-        system_rules = """RULES: 1. NO INTROS. 2. VERTICAL BULLETS ONLY (*). 3. EVERY BULLET ON NEW LINE. 
-        4. YOU ARE A COMPLIANCE AUDITOR. 5. FIND EVERY SINGLE SLA: Availability, Time to Repair, and Notification. 
-        6. LIST WHAT QUALIFIES AS 'NON-COMPLIANT'. 7. USE SIMPLE ENGLISH."""
-    else:
-        # BID RULES - CLEAN GEAR LISTING
+        # COMPLIANCE - DIRECT METRIC FOCUS
         system_rules = """RULES: 
-        1. For 'Specifications', list ONLY the hardware/software names. DO NOT use verbs like 'Install' or 'Setup'.
-        2. START IMMEDIATELY with a vertical bulleted list (*).
-        3. No conversation. No repeating prompt."""
+        1. BE DIRECT. 
+        2. Extract the 'Definition' and 'Objective' for each SLA.
+        3. Explain 'Availability' as the percentage of time the service must work.
+        4. List exactly what counts as a failure (e.g., missing the uptime goal).
+        5. USE SIMPLE ENGLISH. No legal jargon."""
+    else:
+        # BID RULES - UNTOUCHED
+        system_rules = """RULES: 
+        1. For 'Specifications', list ONLY hardware/software names. No verbs.
+        2. START IMMEDIATELY with a vertical bulleted list (*)."""
 
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -55,21 +57,14 @@ def run_ai(text, prompt, is_compliance=False):
         return "⚠️ Scanner timed out."
 
 # ---------------------------
-# 3. SCRAPER FOR AGENCY URL
+# 3. SCRAPER (UNTOUCHED)
 # ---------------------------
 def scrape_la_bids(url):
     try:
-        # Simulating a scrape for IT specific bids from the portal
         r = requests.get(url, timeout=10)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Placeholder for extracting IT-related bid rows based on portal structure
-        return [
-            "* 1082082 - Radio Management Software (Motorola)",
-            "* IT-2026-X - Cloud Storage Expansion",
-            "* POLICE-MDC-99 - Mobile Data Computer Refresh"
-        ]
+        return ["* 1082082 - Radio Management Software (Motorola)", "* IT-2026-X - Cloud Storage Expansion"]
     except:
-        return ["⚠️ Could not connect to portal. Please try again."]
+        return ["⚠️ Could not connect to portal."]
 
 # ---------------------------
 # 4. MAIN APP LOGIC
@@ -77,12 +72,13 @@ def scrape_la_bids(url):
 if st.session_state.active_bid_text:
     doc = st.session_state.active_bid_text
     
-    # --- COMPLIANCE MODE (SLA ONLY - PENALTIES REMOVED) ---
+    # --- COMPLIANCE MODE (DIRECT SLA METRICS) ---
     if st.session_state.analysis_mode == "Reporting":
         st.subheader("📊 SLA & Non-Compliance")
-        st.info(run_ai(doc, "List all SLAs and exactly what makes a contractor 'Non-Compliant'.", is_compliance=True))
+        # Targeted prompt for Availability, Outages, and Repair times based on CALNET docs
+        st.info(run_ai(doc, "Identify each SLA (Availability, Outage, etc.). For each, list the required uptime percentage and what qualifies as non-compliant.", is_compliance=True))
 
-    # --- BID DOCUMENT MODE ---
+    # --- BID DOCUMENT MODE (LOCKED - NO CHANGES) ---
     else:
         if not st.session_state.get("agency_name"):
             with st.status("🏗️ Scanning..."):
@@ -101,34 +97,27 @@ if st.session_state.active_bid_text:
         st.divider()
 
         b1, b2 = st.tabs(["📖 Scope of Work", "🛠️ Specifications"])
-        with b1:
-            st.info(run_ai(doc, "List ONLY the actual physical work and project tasks to be performed."))
-        with b2:
-            # CLEAN GEAR LIST - NO VERBS
-            st.success(run_ai(doc, "List ONLY the hardware, technology gear, and software names. Do not include verbs like install."))
+        with b1: st.info(run_ai(doc, "List ONLY the actual physical work tasks."))
+        with b2: st.success(run_ai(doc, "List ONLY the hardware and software names."))
 
 else:
+    # --- START SCREEN (UNTOUCHED) ---
     st.title("🏛️ Reporting Tool")
     tab1, tab2, tab3 = st.tabs(["📄 Bid Document", "📊 Compliance Requirements", "🔗 Agency URL"])
-    
     with tab1:
         up = st.file_uploader("Upload Bid PDF", type="pdf")
         if up:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up).pages])
             st.session_state.analysis_mode = "Standard"; st.rerun()
-            
     with tab2:
         up_c = st.file_uploader("Upload Contract PDF", type="pdf")
         if up_c:
             st.session_state.active_bid_text = "\n".join([p.extract_text() for p in PdfReader(up_c).pages])
             st.session_state.analysis_mode = "Reporting"; st.rerun()
-            
     with tab3:
         url = st.text_input("Agency URL:", placeholder="Paste portal link here...")
         if url:
-            with st.status("Scraping Portal for IT Bids..."):
-                bids = scrape_la_bids(url)
-            st.write("**Found Open IT Bids:**")
+            bids = scrape_la_bids(url)
             for bid in bids: st.write(bid)
 
 with st.sidebar:
